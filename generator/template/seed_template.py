@@ -161,7 +161,12 @@ def generate_response(config: TraceConfig) -> str:
 
 
 def generate_output(config: TraceConfig) -> dict:
-    feature_mode = config.feature_mode if config.feature_mode in SAMPLE_OUTPUTS else FEATURE_MODES[0]
+    if config.feature_mode in SAMPLE_OUTPUTS:
+        feature_mode = config.feature_mode
+    elif SAMPLE_OUTPUTS:
+        feature_mode = next(iter(SAMPLE_OUTPUTS))
+    else:
+        return {"output_type": config.feature_mode, "time_range": "30d"}
     base = dict(SAMPLE_OUTPUTS[feature_mode])
     base["time_range"] = random.choice(["7d", "30d", "90d"])
 
