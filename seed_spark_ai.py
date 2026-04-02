@@ -457,10 +457,20 @@ def generate_scores(config: TraceConfig) -> dict:
     response_quality = query_correctness * 0.5 + schema_adherence * 0.5
     response_quality = max(0.0, min(1.0, response_quality + random.uniform(-0.05, 0.05)))
 
+    # Thread coherence: based on trace structure completeness
+    if config.quality_tier == "good":
+        thread_coherence = random.uniform(0.85, 1.0)
+    elif config.quality_tier == "needs_review":
+        thread_coherence = random.uniform(0.50, 0.80)
+    else:
+        thread_coherence = random.uniform(0.25, 0.50)
+    thread_coherence = max(0.0, min(1.0, thread_coherence))
+
     return {
         "query_correctness": round(query_correctness, 3),
         "schema_adherence": round(schema_adherence, 3),
         "response_quality": round(response_quality, 3),
+        "thread_coherence": round(thread_coherence, 3),
     }
 
 
@@ -648,6 +658,7 @@ def create_scorers(project_name: str):
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     project_id = _get_project_id(project_name)
 
+    # --- 1. LLM prompt scorer: Query correctness ---
     llm_scorers = [
         {
             "name": "Query correctness",
@@ -695,54 +706,6 @@ def create_scorers(project_name: str):
             },
             "metadata": {
                 "category": "accuracy",
-                "owner": "spark-ai-team",
-                "deployment_gate": True,
-            },
-        },
-        {
-            "name": "Schema adherence",
-            "slug": "schema-adherence",
-            "description": (
-                "Evaluates whether Spark AI only referenced events and properties that actually "
-                "exist in the customer's project schema. Detects hallucinated events, non-existent "
-                "properties, and schema mismatches."
-            ),
-            "function_type": "scorer",
-            "function_data": {"type": "prompt"},
-            "prompt_data": {
-                "prompt": {
-                    "type": "chat",
-                    "messages": [
-                        {
-                            "role": "system",
-                            "content": (
-                                "You are a data quality reviewer checking whether an AI analytics assistant "
-                                "hallucinated any events or properties that don't exist in the project schema.\n\n"
-                                "Project schema:\n"
-                                "Events: {{metadata.schema_events}}\n"
-                                "Properties: {{metadata.schema_properties}}\n\n"
-                                "User's question: {{input}}\n"
-                                "Generated query: {{metadata.generated_query}}\n"
-                                "AI response: {{output}}\n\n"
-                                "Check for schema violations:\n"
-                                "1. Does the query reference any events NOT in the schema?\n"
-                                "2. Does the query use any properties NOT in the schema?\n"
-                                "3. Are property values realistic for the property type?\n"
-                                "4. If the user asked about something not in the schema, did Spark say so clearly?\n"
-                                "5. Are the event-property combinations valid?"
-                            ),
-                        },
-                    ],
-                },
-                "options": {"model": "gpt-5-mini", "params": {"temperature": 0.1}},
-                "parser": {
-                    "type": "llm_classifier",
-                    "use_cot": True,
-                    "choice_scores": {"Clean": 1.0, "Minor issue": 0.6, "Schema violation": 0.0},
-                },
-            },
-            "metadata": {
-                "category": "safety",
                 "owner": "spark-ai-team",
                 "deployment_gate": True,
             },
@@ -798,10 +761,201 @@ def create_scorers(project_name: str):
         },
     ]
 
+    # --- 2. Code scorer: Schema adherence (deterministic, no LLM needed) ---
+    schema_adherence_code = {
+        "name": "Schema adherence",
+        "slug": "schema-adherence",
+        "description": (
+            "Code scorer that deterministically checks whether the AI response references only "
+            "events and properties that exist in the customer's project schema. Detects hallucinated "
+            "entities without requiring an LLM call."
+        ),
+        "function_type": "scorer",
+        "function_data": {
+            "type": "code",
+            "data": {
+                "type": "inline",
+                "runtime_context": {"runtime": "node", "version": "20"},
+                "code": """
+async function handler({ output, metadata }) {
+  const schemaEvents = (metadata?.schema_events || "").split(",").map(e => e.trim().toLowerCase()).filter(Boolean);
+  const schemaProperties = (metadata?.schema_properties || "").split(",").map(p => p.trim().toLowerCase()).filter(Boolean);
+
+  if (!output || !schemaEvents.length) {
+    return { name: "Schema adherence", score: 1, metadata: { reason: "No output or schema to validate" } };
+  }
+
+  const text = (typeof output === "string" ? output : JSON.stringify(output)).toLowerCase();
+  let violations = [];
+
+  // Check for common hallucinated event patterns not in schema
+  const eventPatterns = ["click", "view", "purchase", "login", "signup", "subscribe", "cancel", "upgrade",
+    "downgrade", "search", "upload", "download", "share", "invite", "submit", "create", "delete", "update"];
+  for (const pattern of eventPatterns) {
+    const regex = new RegExp(`\\\\b${pattern}[a-z_ ]*(?:event|action)?\\\\b`, "gi");
+    const matches = text.match(regex) || [];
+    for (const match of matches) {
+      const normalized = match.trim().toLowerCase();
+      if (!schemaEvents.some(e => normalized.includes(e) || e.includes(normalized))) {
+        // Only flag if it looks like an event reference in context
+        if (text.includes(`"${normalized}"`) || text.includes(`'${normalized}'`) || text.includes(`event: ${normalized}`)) {
+          violations.push(`Possible hallucinated event: "${match.trim()}"`);
+        }
+      }
+    }
+  }
+
+  // Check for property references not in schema
+  const propPattern = /(?:broken? down by|breakdown|filter(?:ed)? by|grouped? by|property[: ]+)["']?([a-z_]+)["']?/gi;
+  let propMatch;
+  while ((propMatch = propPattern.exec(text)) !== null) {
+    const prop = propMatch[1].toLowerCase();
+    if (!schemaProperties.includes(prop) && !["none", "all", "any", "the", "and", "this"].includes(prop)) {
+      violations.push(`Property not in schema: "${propMatch[1]}"`);
+    }
+  }
+
+  const uniqueViolations = [...new Set(violations)];
+  const score = uniqueViolations.length === 0 ? 1.0 : uniqueViolations.length <= 1 ? 0.6 : 0.0;
+
+  return {
+    name: "Schema adherence",
+    score,
+    metadata: {
+      violations: uniqueViolations,
+      violation_count: uniqueViolations.length,
+      schema_events_count: schemaEvents.length,
+      schema_properties_count: schemaProperties.length,
+    },
+  };
+}
+""",
+            },
+        },
+        "metadata": {
+            "category": "safety",
+            "scorer_type": "code",
+            "owner": "spark-ai-team",
+            "deployment_gate": True,
+        },
+    }
+
+    # --- 3. Code scorer: Thread coherence (trace-level, uses spans) ---
+    thread_coherence_code = {
+        "name": "Thread coherence",
+        "slug": "thread-coherence",
+        "description": (
+            "Trace-level code scorer that analyzes the full conversation thread across all spans. "
+            "Checks that multi-turn conversations maintain context, that the query validation step "
+            "agrees with the LLM output, and that the overall trace is internally consistent."
+        ),
+        "function_type": "scorer",
+        "function_data": {
+            "type": "code",
+            "data": {
+                "type": "inline",
+                "runtime_context": {"runtime": "node", "version": "20"},
+                "code": """
+async function handler({ trace, output, metadata }) {
+  const issues = [];
+  let spanCount = 0;
+  let hasSchemaLookup = false;
+  let hasValidation = false;
+  let validationPassed = null;
+  let llmSpanCount = 0;
+
+  // Analyze all spans in the trace
+  if (trace) {
+    const spans = await trace.getSpans();
+    spanCount = spans.length;
+
+    for (const span of spans) {
+      const name = (span.name || "").toLowerCase();
+
+      if (name.includes("schema") || name.includes("context")) {
+        hasSchemaLookup = true;
+        // Verify schema lookup returned data
+        if (span.output && (!span.output.events || span.output.events.length === 0)) {
+          issues.push("Schema lookup returned empty events list");
+        }
+      }
+
+      if (name.includes("validation") || name.includes("verify")) {
+        hasValidation = true;
+        if (span.output) {
+          validationPassed = span.output.valid === true;
+          if (!validationPassed && span.output.issues?.length > 0) {
+            issues.push(`Validation flagged: ${span.output.issues.join(", ")}`);
+          }
+        }
+      }
+
+      // Count LLM spans (from wrap_openai)
+      if (span.span_attributes?.type === "llm" || name.includes("openai") || name.includes("chat")) {
+        llmSpanCount++;
+      }
+    }
+  }
+
+  // Thread structure checks
+  if (spanCount < 2) {
+    issues.push("Trace has fewer than 2 spans — expected at least schema lookup + LLM call");
+  }
+  if (!hasSchemaLookup) {
+    issues.push("Missing schema/context lookup span");
+  }
+  if (!hasValidation) {
+    issues.push("Missing query validation span");
+  }
+
+  // Cross-span consistency: if validation failed but we still got output
+  if (validationPassed === false && output && !String(output).toLowerCase().includes("error")) {
+    issues.push("Validation failed but response doesn't indicate an error");
+  }
+
+  // Multi-turn coherence: check if turn count matches LLM calls
+  const turnCount = metadata?.turn_count || 0;
+  const isMultiTurn = metadata?.is_multi_turn === true;
+  if (isMultiTurn && llmSpanCount > 0 && llmSpanCount < Math.floor(turnCount / 2)) {
+    issues.push(`Multi-turn trace has ${turnCount} turns but only ${llmSpanCount} LLM calls`);
+  }
+
+  const score = issues.length === 0 ? 1.0 : issues.length <= 1 ? 0.75 : issues.length <= 2 ? 0.5 : 0.25;
+
+  return {
+    name: "Thread coherence",
+    score,
+    metadata: {
+      issues,
+      issue_count: issues.length,
+      span_count: spanCount,
+      has_schema_lookup: hasSchemaLookup,
+      has_validation: hasValidation,
+      validation_passed: validationPassed,
+      llm_span_count: llmSpanCount,
+      is_multi_turn: isMultiTurn,
+    },
+  };
+}
+""",
+            },
+        },
+        "metadata": {
+            "category": "trace_quality",
+            "scorer_type": "code",
+            "scope": "trace",
+            "owner": "spark-ai-team",
+        },
+    }
+
+    # Create all scorers
     scorer_ids = []
-    for s in llm_scorers:
+    all_scorers = llm_scorers + [schema_adherence_code, thread_coherence_code]
+
+    for s in all_scorers:
+        ft = s.get("function_data", {}).get("type", "prompt")
         if _api_upsert_function(api_url, api_key, project_id, s):
-            print(f"  Created scorer: {s['slug']}")
+            print(f"  Created scorer: {s['slug']} ({ft})")
             list_resp = requests.get(
                 f"{api_url}/v1/function",
                 params={"project_id": project_id, "slug": s["slug"], "function_type": "scorer"},
@@ -812,28 +966,56 @@ def create_scorers(project_name: str):
 
     print("  Scorers published successfully")
 
-    if scorer_ids:
-        score_rule_payload = {
+    # Create TWO online scoring rules:
+    # 1. Span-level rule for LLM scorers + code schema check (runs per-span)
+    # 2. Trace-level rule for thread coherence (waits for full trace, uses idle_seconds)
+    span_scorer_ids = scorer_ids[:3]  # query-correctness, response-quality, schema-adherence
+    trace_scorer_ids = scorer_ids[3:]  # thread-coherence
+
+    if span_scorer_ids:
+        span_rule_payload = {
             "project_id": project_id,
             "name": "Spark AI quality",
             "score_type": "online",
-            "description": "Runs query correctness, schema adherence, and response quality scorers on all production Spark AI traces",
+            "description": "Runs query correctness, response quality, and schema adherence scorers on Spark AI spans",
             "config": {
                 "online": {
                     "sampling_rate": 1.0,
-                    "scorers": [{"type": "function", "id": sid} for sid in scorer_ids],
+                    "scorers": [{"type": "function", "id": sid} for sid in span_scorer_ids],
                     "apply_to_root_span": True,
                     "scope": {"type": "trace"},
                 },
             },
         }
-        resp = requests.post(f"{api_url}/v1/project_score", json=score_rule_payload, headers=headers)
+        resp = requests.post(f"{api_url}/v1/project_score", json=span_rule_payload, headers=headers)
         if resp.ok:
-            print("  Created online scoring rule: Spark AI quality (100% sampling, trace scope)")
+            print("  Created online scoring rule: Spark AI quality (span-level, 100% sampling)")
         elif resp.status_code == 409:
-            print("  Online scoring rule already exists (skipping)")
+            print("  Online scoring rule 'Spark AI quality' already exists (skipping)")
         else:
-            print(f"  Warning: online scoring rule: {resp.status_code} {resp.text[:200]}")
+            print(f"  Warning: scoring rule: {resp.status_code} {resp.text[:200]}")
+
+    if trace_scorer_ids:
+        trace_rule_payload = {
+            "project_id": project_id,
+            "name": "Spark AI thread coherence",
+            "score_type": "online",
+            "description": "Trace-level scorer that waits for the full conversation thread, then checks cross-span consistency and multi-turn coherence",
+            "config": {
+                "online": {
+                    "sampling_rate": 1.0,
+                    "scorers": [{"type": "function", "id": sid} for sid in trace_scorer_ids],
+                    "scope": {"type": "trace", "idle_seconds": 10},
+                },
+            },
+        }
+        resp = requests.post(f"{api_url}/v1/project_score", json=trace_rule_payload, headers=headers)
+        if resp.ok:
+            print("  Created online scoring rule: Spark AI thread coherence (trace-level, idle_seconds=10)")
+        elif resp.status_code == 409:
+            print("  Online scoring rule 'Spark AI thread coherence' already exists (skipping)")
+        else:
+            print(f"  Warning: scoring rule: {resp.status_code} {resp.text[:200]}")
 
 
 def create_facets(project_name: str):
