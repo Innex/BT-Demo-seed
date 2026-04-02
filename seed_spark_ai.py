@@ -115,6 +115,16 @@ PROMPT_VERSIONS = ["v3.1-structured", "v3.2-conversational"]
 
 MODELS = ["gpt-5-mini", "gpt-5-nano", "claude-sonnet-4-6"]
 
+
+def _get_api_model(model: str) -> str:
+    """Map model names to OpenAI-compatible API models for content generation.
+
+    Claude models are simulated via OpenAI for demo content generation.
+    """
+    if model.startswith("claude"):
+        return "gpt-5-mini"
+    return model
+
 # User natural language queries organized by report type
 USER_QUERIES = {
     "insights": [
@@ -563,6 +573,9 @@ def create_prompts(project_name: str):
     print("\n--- Creating prompts ---")
     api_url = os.environ.get("BRAINTRUST_API_URL", "https://api.braintrust.dev")
     api_key = os.environ.get("BRAINTRUST_API_KEY", "")
+    if not api_key:
+        print("  ERROR: BRAINTRUST_API_KEY is not set. Cannot create prompts.")
+        return
     project_id = _get_project_id(project_name)
 
     prompts = [
@@ -629,6 +642,9 @@ def create_scorers(project_name: str):
     print("\n--- Creating scorers ---")
     api_url = os.environ.get("BRAINTRUST_API_URL", "https://api.braintrust.dev")
     api_key = os.environ.get("BRAINTRUST_API_KEY", "")
+    if not api_key:
+        print("  ERROR: BRAINTRUST_API_KEY is not set. Cannot create scorers.")
+        return
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     project_id = _get_project_id(project_name)
 
@@ -828,6 +844,9 @@ def create_facets(project_name: str):
 
     api_url = os.environ.get("BRAINTRUST_API_URL", "https://api.braintrust.dev")
     api_key = os.environ.get("BRAINTRUST_API_KEY", "")
+    if not api_key:
+        print("  ERROR: BRAINTRUST_API_KEY is not set. Cannot create facets.")
+        return
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     project_id = _get_project_id(project_name)
 
@@ -836,6 +855,7 @@ def create_facets(project_name: str):
             "name": "Report type requested",
             "slug": "report-type-requested",
             "description": "Classifies which Mixpanel report type the user's NL query maps to",
+            "function_type": "facet",
             "function_data": {
                 "type": "facet",
                 "prompt": (
@@ -856,6 +876,7 @@ def create_facets(project_name: str):
             "name": "Query complexity",
             "slug": "query-complexity",
             "description": "Assesses how complex the user's analytics question is to translate into a Mixpanel query",
+            "function_type": "facet",
             "function_data": {
                 "type": "facet",
                 "prompt": (
@@ -878,6 +899,7 @@ def create_facets(project_name: str):
             "name": "Failure mode",
             "slug": "failure-mode",
             "description": "Classifies the type of error when Spark AI generates an incorrect query",
+            "function_type": "facet",
             "function_data": {
                 "type": "facet",
                 "prompt": (
@@ -899,6 +921,7 @@ def create_facets(project_name: str):
             "name": "Customer vertical",
             "slug": "customer-vertical",
             "description": "Identifies the customer's industry vertical from the analytics schema and query context",
+            "function_type": "facet",
             "function_data": {
                 "type": "facet",
                 "prompt": (
@@ -1453,11 +1476,9 @@ def log_trace(logger, config: TraceConfig, trace_idx: int, oai_client):
             )
 
         # Step 2: LLM call via wrap_openai
-        temperature = 0.3 if config.prompt_version == "v3.1-structured" else 0.6
         response = oai_client.chat.completions.create(
-            model="gpt-4.1-mini",
+            model=_get_api_model(config.model),
             messages=messages,
-            temperature=temperature,
         )
         spark_response = response.choices[0].message.content
 
@@ -1512,7 +1533,7 @@ def log_trace(logger, config: TraceConfig, trace_idx: int, oai_client):
                 "report_type": config.report_type,
                 "query_complexity": config.query_complexity,
                 "prompt_version": config.prompt_version,
-                "model": "gpt-4.1-mini",
+                "model": config.model,
                 "quality_tier": config.quality_tier,
                 "trace_index": trace_idx,
                 "turn_count": len(conversation),
@@ -1530,7 +1551,7 @@ def log_trace(logger, config: TraceConfig, trace_idx: int, oai_client):
         "report_type": config.report_type,
         "query_complexity": config.query_complexity,
         "prompt_version": config.prompt_version,
-        "model": "gpt-4.1-mini",
+        "model": config.model,
         "quality_tier": config.quality_tier,
         "user_query": config.user_query,
         "spark_response": spark_response,
@@ -1639,9 +1660,8 @@ def log_multi_turn_trace(logger, conversation: dict, trace_idx: int, oai_client)
             actual_turns.append(user_turn)
 
             response = oai_client.chat.completions.create(
-                model="gpt-4.1-mini",
+                model=_get_api_model(config.model),
                 messages=accumulated_messages,
-                temperature=0.3 if config.prompt_version == "v3.1-structured" else 0.6,
             )
             assistant_content = response.choices[0].message.content
             assistant_turn = {"role": "assistant", "content": assistant_content}
@@ -1679,7 +1699,7 @@ def log_multi_turn_trace(logger, conversation: dict, trace_idx: int, oai_client)
                 "report_type": report_type,
                 "query_complexity": "multi_turn",
                 "prompt_version": prompt_version,
-                "model": "gpt-4.1-mini",
+                "model": config.model,
                 "quality_tier": quality_tier,
                 "trace_index": trace_idx,
                 "turn_count": len(actual_turns),
@@ -1727,8 +1747,6 @@ def run_experiments(project_name: str, oai_client=None):
         print(f"  Running experiment: {exp_name} ({len(test_rows)} test cases)")
         experiment = braintrust.init(project_name, exp_name)
 
-        temperature = 0.3 if prompt_ver == "v3.1-structured" else 0.6
-
         for i, row in enumerate(test_rows):
             row_input = row.get("input", "")
             row_expected = row.get("expected", "")
@@ -1743,7 +1761,7 @@ def run_experiments(project_name: str, oai_client=None):
                 report_type=report_type,
                 query_complexity=row_metadata.get("query_complexity", "moderate"),
                 prompt_version=prompt_ver,
-                model="gpt-4.1-mini",
+                model="gpt-5-mini",
                 quality_tier="good",
                 user_query=row_input if isinstance(row_input, str) else str(row_input),
                 schema_context=schema,
@@ -1769,9 +1787,8 @@ def run_experiments(project_name: str, oai_client=None):
                     )
 
                 response = oai_client.chat.completions.create(
-                    model="gpt-4.1-mini",
+                    model=_get_api_model("gpt-5-mini"),
                     messages=messages,
-                    temperature=temperature,
                 )
                 spark_response = response.choices[0].message.content
 
@@ -1816,7 +1833,7 @@ def run_experiments(project_name: str, oai_client=None):
                         "report_type": report_type,
                         "vertical": vertical,
                         "query_complexity": row_metadata.get("query_complexity", "moderate"),
-                        "model": "gpt-4.1-mini",
+                        "model": "gpt-5-mini",
                         "schema_events": row_metadata.get("schema_events", ""),
                         "schema_properties": row_metadata.get("schema_properties", ""),
                         "generated_query": str(generate_query_output(config)),
@@ -1834,12 +1851,9 @@ def run_experiments(project_name: str, oai_client=None):
     print("  Prompt A/B experiments complete")
 
     print("\n  Running model comparison experiments...")
-    model_configs = [
-        ("gpt-4.1-mini", 0.3),
-        ("gpt-4.1-nano", 0.2),
-    ]
+    model_configs = ["gpt-5-mini", "gpt-5-nano"]
 
-    for model_name, temp in model_configs:
+    for model_name in model_configs:
         exp_name = f"Model comparison: {model_name}"
         print(f"  Running experiment: {exp_name}")
         experiment = braintrust.init(project_name, exp_name)
@@ -1884,9 +1898,8 @@ def run_experiments(project_name: str, oai_client=None):
                     )
 
                 response = oai_client.chat.completions.create(
-                    model=model_name,
+                    model=_get_api_model(model_name),
                     messages=messages,
-                    temperature=temp,
                 )
                 spark_response = response.choices[0].message.content
 
@@ -1903,7 +1916,7 @@ def run_experiments(project_name: str, oai_client=None):
                 # Model-specific score profiles: mini is better overall, nano trades quality for speed/cost
                 complexity = row_metadata.get("query_complexity", "moderate")
                 complexity_penalty = {"simple": 0.0, "moderate": -0.08, "complex": -0.18}.get(complexity, -0.05)
-                if model_name == "gpt-4.1-mini":
+                if model_name == "gpt-5-mini":
                     correctness_base = 0.88
                 else:  # nano — cheaper but less accurate on complex queries
                     correctness_base = 0.82

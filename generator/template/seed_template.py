@@ -47,6 +47,13 @@ PROMPT_VERSIONS = ["{{PROMPT_VERSION_A}}", "{{PROMPT_VERSION_B}}"]
 
 MODELS = ["gpt-5-mini", "gpt-5-nano", "claude-sonnet-4-6"]
 
+
+def _get_api_model(model: str) -> str:
+    """Map model names to OpenAI-compatible API models for content generation."""
+    if model.startswith("claude"):
+        return "gpt-5-mini"
+    return model
+
 # User natural language queries organized by feature mode
 USER_QUERIES = {{USER_QUERIES}}
 
@@ -335,6 +342,9 @@ def create_prompts(project_name: str):
     print("\n--- Creating prompts ---")
     api_url = os.environ.get("BRAINTRUST_API_URL", "https://api.braintrust.dev")
     api_key = os.environ.get("BRAINTRUST_API_KEY", "")
+    if not api_key:
+        print("  ERROR: BRAINTRUST_API_KEY is not set. Cannot create prompts.")
+        return
     project_id = _get_project_id(project_name)
 
     slug_a = PROMPT_VERSIONS[0].lower().replace(".", "-").replace(" ", "-")
@@ -404,6 +414,9 @@ def create_scorers(project_name: str):
     print("\n--- Creating scorers ---")
     api_url = os.environ.get("BRAINTRUST_API_URL", "https://api.braintrust.dev")
     api_key = os.environ.get("BRAINTRUST_API_KEY", "")
+    if not api_key:
+        print("  ERROR: BRAINTRUST_API_KEY is not set. Cannot create scorers.")
+        return
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     project_id = _get_project_id(project_name)
 
@@ -476,6 +489,9 @@ def create_facets(project_name: str):
 
     api_url = os.environ.get("BRAINTRUST_API_URL", "https://api.braintrust.dev")
     api_key = os.environ.get("BRAINTRUST_API_KEY", "")
+    if not api_key:
+        print("  ERROR: BRAINTRUST_API_KEY is not set. Cannot create facets.")
+        return
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     project_id = _get_project_id(project_name)
 
@@ -485,6 +501,7 @@ def create_facets(project_name: str):
             "name": f["name"],
             "slug": f["slug"],
             "description": f["description"],
+            "function_type": "facet",
             "function_data": {
                 "type": "facet",
                 "prompt": f["prompt"],
@@ -715,11 +732,9 @@ def log_trace(logger, config: TraceConfig, trace_idx: int, oai_client):
             )
 
         # Step 2: LLM call via wrap_openai
-        temperature = 0.3 if config.prompt_version == PROMPT_VERSIONS[0] else 0.6
         response = oai_client.chat.completions.create(
-            model="gpt-4.1-mini",
+            model=_get_api_model(config.model),
             messages=messages,
-            temperature=temperature,
         )
         ai_response = response.choices[0].message.content
 
@@ -767,7 +782,7 @@ def log_trace(logger, config: TraceConfig, trace_idx: int, oai_client):
                 "feature_mode": config.feature_mode,
                 "query_complexity": config.query_complexity,
                 "prompt_version": config.prompt_version,
-                "model": "gpt-4.1-mini",
+                "model": config.model,
                 "quality_tier": config.quality_tier,
                 "trace_index": trace_idx,
                 "turn_count": len(conversation),
@@ -785,7 +800,7 @@ def log_trace(logger, config: TraceConfig, trace_idx: int, oai_client):
         "feature_mode": config.feature_mode,
         "query_complexity": config.query_complexity,
         "prompt_version": config.prompt_version,
-        "model": "gpt-4.1-mini",
+        "model": config.model,
         "quality_tier": config.quality_tier,
         "user_query": config.user_query,
         "ai_response": ai_response,
@@ -839,9 +854,8 @@ def log_multi_turn_trace(logger, conversation: dict, trace_idx: int, oai_client)
             actual_turns.append(user_turn)
 
             response = oai_client.chat.completions.create(
-                model="gpt-4.1-mini",
+                model=_get_api_model(config.model),
                 messages=accumulated_messages,
-                temperature=0.3 if config.prompt_version == PROMPT_VERSIONS[0] else 0.6,
             )
             assistant_content = response.choices[0].message.content
             assistant_turn = {"role": "assistant", "content": assistant_content}
@@ -878,7 +892,7 @@ def log_multi_turn_trace(logger, conversation: dict, trace_idx: int, oai_client)
                 "feature_mode": feature_mode,
                 "query_complexity": "multi_turn",
                 "prompt_version": prompt_version,
-                "model": "gpt-4.1-mini",
+                "model": config.model,
                 "quality_tier": quality_tier,
                 "trace_index": trace_idx,
                 "turn_count": len(actual_turns),
@@ -926,8 +940,6 @@ def run_experiments(project_name: str, oai_client=None):
     ]):
         print(f"  Running experiment: {exp_name} ({len(test_rows)} test cases)")
         experiment = braintrust.init(project_name, exp_name)
-        temperature = 0.3 if prompt_idx == 0 else 0.6
-
         for i, row in enumerate(test_rows):
             row_input = row.get("input", "")
             row_expected = row.get("expected", "")
@@ -942,7 +954,7 @@ def run_experiments(project_name: str, oai_client=None):
                 feature_mode=feature_mode,
                 query_complexity=row_metadata.get("query_complexity", "moderate"),
                 prompt_version=prompt_ver,
-                model="gpt-4.1-mini",
+                model="gpt-5-mini",
                 quality_tier="good",
                 user_query=row_input if isinstance(row_input, str) else str(row_input),
                 schema_context=schema,
@@ -965,7 +977,7 @@ def run_experiments(project_name: str, oai_client=None):
                     )
 
                 response = oai_client.chat.completions.create(
-                    model="gpt-4.1-mini", messages=messages, temperature=temperature,
+                    model=_get_api_model("gpt-5-mini"), messages=messages,
                 )
                 ai_response = response.choices[0].message.content
 
@@ -1005,7 +1017,7 @@ def run_experiments(project_name: str, oai_client=None):
                         "feature_mode": feature_mode,
                         "vertical": vertical,
                         "query_complexity": row_metadata.get("query_complexity", "moderate"),
-                        "model": "gpt-4.1-mini",
+                        "model": "gpt-5-mini",
                         "schema_entities": row_metadata.get("schema_entities", ""),
                         "schema_properties": row_metadata.get("schema_properties", ""),
                         "generated_output": str(generate_output(config)),
@@ -1023,9 +1035,9 @@ def run_experiments(project_name: str, oai_client=None):
     print("  Prompt A/B experiments complete")
 
     print("\n  Running model comparison experiments...")
-    model_configs = [("gpt-4.1-mini", 0.3), ("gpt-4.1-nano", 0.2)]
+    model_configs = ["gpt-5-mini", "gpt-5-nano"]
 
-    for model_name, temp in model_configs:
+    for model_name in model_configs:
         exp_name = f"Model comparison: {model_name}"
         print(f"  Running experiment: {exp_name}")
         experiment = braintrust.init(project_name, exp_name)
@@ -1066,7 +1078,7 @@ def run_experiments(project_name: str, oai_client=None):
                     )
 
                 response = oai_client.chat.completions.create(
-                    model=model_name, messages=messages, temperature=temp,
+                    model=_get_api_model(model_name), messages=messages,
                 )
                 ai_response = response.choices[0].message.content
 
@@ -1078,7 +1090,7 @@ def run_experiments(project_name: str, oai_client=None):
 
                 complexity = row_metadata.get("query_complexity", "moderate")
                 complexity_penalty = {"simple": 0.0, "moderate": -0.08, "complex": -0.18}.get(complexity, -0.05)
-                if model_name == "gpt-4.1-mini":
+                if model_name == "gpt-5-mini":
                     accuracy_base = 0.88
                 else:
                     accuracy_base = 0.82

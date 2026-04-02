@@ -14,7 +14,7 @@ Spark AI is Mixpanel's NL-to-analytics agent — users ask questions in plain En
 | **4 facets** | Report type, Query complexity, Failure mode, Customer vertical |
 | **1 topic automation** | Auto-clusters traces by Sentiment, Task, Issues, Failure mode |
 | **1 golden dataset** | ~34 curated test cases across all report types + edge cases |
-| **4 experiments** | Prompt A vs B, gpt-4.1-mini vs gpt-4.1-nano (with scores) |
+| **4 experiments** | Prompt A vs B, gpt-5-mini vs gpt-5-nano (with scores) |
 | **500 traces** | Realistic Spark AI queries across 4 customer verticals |
 | **3 derived datasets** | Production samples, Flagged for review, Playground scenarios |
 
