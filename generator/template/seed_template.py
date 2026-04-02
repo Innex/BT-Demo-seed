@@ -216,6 +216,15 @@ def generate_scores(config: TraceConfig) -> dict:
     quality = accuracy * 0.5 + grounding * 0.5
     quality = max(0.0, min(1.0, quality + random.uniform(-0.05, 0.05)))
 
+    # Thread coherence: based on trace structure completeness
+    if config.quality_tier == "good":
+        thread_coherence = random.uniform(0.85, 1.0)
+    elif config.quality_tier == "needs_review":
+        thread_coherence = random.uniform(0.50, 0.80)
+    else:
+        thread_coherence = random.uniform(0.25, 0.50)
+    thread_coherence = max(0.0, min(1.0, thread_coherence))
+
     # Use the scorer slugs from SCORERS config
     scorer_slugs = [s["slug"] for s in SCORERS]
     if len(scorer_slugs) >= 3:
@@ -223,11 +232,13 @@ def generate_scores(config: TraceConfig) -> dict:
             scorer_slugs[0]: round(accuracy, 3),
             scorer_slugs[1]: round(grounding, 3),
             scorer_slugs[2]: round(quality, 3),
+            "thread_coherence": round(thread_coherence, 3),
         }
     return {
         "accuracy": round(accuracy, 3),
         "grounding": round(grounding, 3),
         "quality": round(quality, 3),
+        "thread_coherence": round(thread_coherence, 3),
     }
 
 
@@ -420,6 +431,7 @@ def create_scorers(project_name: str):
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     project_id = _get_project_id(project_name)
 
+    # --- 1. LLM prompt scorers (from SCORERS config) ---
     llm_scorers = []
     for s in SCORERS:
         llm_scorers.append({
@@ -443,10 +455,178 @@ def create_scorers(project_name: str):
             "metadata": s.get("metadata", {"category": "quality", "owner": "ai-team"}),
         })
 
+    # --- 2. Code scorer: Grounding check (deterministic, no LLM needed) ---
+    grounding_code_scorer = {
+        "name": f"{AI_PRODUCT_NAME} grounding",
+        "slug": "grounding-check",
+        "description": (
+            f"Code scorer that deterministically checks whether {AI_PRODUCT_NAME} responses "
+            "only reference entities and properties that exist in the context schema. "
+            "Detects hallucinated references without requiring an LLM call."
+        ),
+        "function_type": "scorer",
+        "function_data": {
+            "type": "code",
+            "data": {
+                "type": "inline",
+                "runtime_context": {"runtime": "node", "version": "20"},
+                "code": """
+async function handler({ output, metadata }) {
+  const entities = (metadata?.schema_entities || "").split(",").map(e => e.trim().toLowerCase()).filter(Boolean);
+  const properties = (metadata?.schema_properties || "").split(",").map(p => p.trim().toLowerCase()).filter(Boolean);
+
+  if (!output || !entities.length) {
+    return { name: "Grounding check", score: 1, metadata: { reason: "No output or schema to validate" } };
+  }
+
+  const text = (typeof output === "string" ? output : JSON.stringify(output)).toLowerCase();
+  let violations = [];
+
+  // Check for property references not in schema
+  const propPattern = /(?:broken? down by|breakdown|filter(?:ed)? by|grouped? by|property[: ]+)["']?([a-z_]+)["']?/gi;
+  let propMatch;
+  while ((propMatch = propPattern.exec(text)) !== null) {
+    const prop = propMatch[1].toLowerCase();
+    if (!properties.includes(prop) && !["none", "all", "any", "the", "and", "this"].includes(prop)) {
+      violations.push("Property not in schema: " + propMatch[1]);
+    }
+  }
+
+  const uniqueViolations = [...new Set(violations)];
+  const score = uniqueViolations.length === 0 ? 1.0 : uniqueViolations.length <= 1 ? 0.6 : 0.0;
+
+  return {
+    name: "Grounding check",
+    score,
+    metadata: {
+      violations: uniqueViolations,
+      violation_count: uniqueViolations.length,
+      entity_count: entities.length,
+      property_count: properties.length,
+    },
+  };
+}
+""",
+            },
+        },
+        "metadata": {
+            "category": "safety",
+            "scorer_type": "code",
+            "owner": "ai-team",
+            "deployment_gate": True,
+        },
+    }
+
+    # --- 3. Code scorer: Thread coherence (trace-level, uses spans) ---
+    thread_coherence_code = {
+        "name": "Thread coherence",
+        "slug": "thread-coherence",
+        "description": (
+            "Trace-level code scorer that analyzes the full conversation thread across all spans. "
+            "Checks that multi-turn conversations maintain context, that validation steps "
+            "agree with output, and that the overall trace is internally consistent."
+        ),
+        "function_type": "scorer",
+        "function_data": {
+            "type": "code",
+            "data": {
+                "type": "inline",
+                "runtime_context": {"runtime": "node", "version": "20"},
+                "code": """
+async function handler({ trace, output, metadata }) {
+  const issues = [];
+  let spanCount = 0;
+  let hasContext = false;
+  let hasValidation = false;
+  let validationPassed = null;
+  let llmSpanCount = 0;
+
+  if (trace) {
+    const spans = await trace.getSpans();
+    spanCount = spans.length;
+
+    for (const span of spans) {
+      const name = (span.name || "").toLowerCase();
+
+      if (name.includes("schema") || name.includes("context") || name.includes("lookup")) {
+        hasContext = true;
+        if (span.output && span.output.entities && span.output.entities.length === 0) {
+          issues.push("Context lookup returned empty entities");
+        }
+      }
+
+      if (name.includes("validation") || name.includes("verify")) {
+        hasValidation = true;
+        if (span.output) {
+          validationPassed = span.output.valid === true;
+          if (!validationPassed && span.output.issues?.length > 0) {
+            issues.push("Validation flagged: " + span.output.issues.join(", "));
+          }
+        }
+      }
+
+      if (span.span_attributes?.type === "llm" || name.includes("openai") || name.includes("chat")) {
+        llmSpanCount++;
+      }
+    }
+  }
+
+  if (spanCount < 2) {
+    issues.push("Trace has fewer than 2 spans");
+  }
+  if (!hasContext) {
+    issues.push("Missing context/schema lookup span");
+  }
+  if (!hasValidation) {
+    issues.push("Missing validation span");
+  }
+
+  if (validationPassed === false && output && !String(output).toLowerCase().includes("error")) {
+    issues.push("Validation failed but response does not indicate an error");
+  }
+
+  const isMultiTurn = metadata?.is_multi_turn === true;
+  const turnCount = metadata?.turn_count || 0;
+  if (isMultiTurn && llmSpanCount > 0 && llmSpanCount < Math.floor(turnCount / 2)) {
+    issues.push("Multi-turn trace has " + turnCount + " turns but only " + llmSpanCount + " LLM calls");
+  }
+
+  const score = issues.length === 0 ? 1.0 : issues.length <= 1 ? 0.75 : issues.length <= 2 ? 0.5 : 0.25;
+
+  return {
+    name: "Thread coherence",
+    score,
+    metadata: {
+      issues,
+      issue_count: issues.length,
+      span_count: spanCount,
+      has_context: hasContext,
+      has_validation: hasValidation,
+      validation_passed: validationPassed,
+      llm_span_count: llmSpanCount,
+      is_multi_turn: isMultiTurn,
+    },
+  };
+}
+""",
+            },
+        },
+        "metadata": {
+            "category": "trace_quality",
+            "scorer_type": "code",
+            "scope": "trace",
+            "owner": "ai-team",
+        },
+    }
+
+    # Create all scorers
     scorer_ids = []
-    for s in llm_scorers:
+    all_scorers = llm_scorers + [grounding_code_scorer, thread_coherence_code]
+
+    for s in all_scorers:
+        ft = s.get("function_data", {}).get("type", "prompt")
         if _api_upsert_function(api_url, api_key, project_id, s):
-            print(f"  Created scorer: {s['slug']}")
+            print(f"  Created scorer: {s['slug']} ({ft})")
             list_resp = requests.get(
                 f"{api_url}/v1/function",
                 params={"project_id": project_id, "slug": s["slug"], "function_type": "scorer"},
@@ -457,28 +637,56 @@ def create_scorers(project_name: str):
 
     print("  Scorers published successfully")
 
-    if scorer_ids:
-        score_rule_payload = {
+    # Online scoring rules:
+    # 1. Span-level for LLM + code grounding scorers
+    # 2. Trace-level for thread coherence (uses idle_seconds for thread completion)
+    span_scorer_ids = scorer_ids[:-1]  # all except thread-coherence
+    trace_scorer_ids = scorer_ids[-1:]  # thread-coherence
+
+    if span_scorer_ids:
+        span_rule_payload = {
             "project_id": project_id,
             "name": f"{AI_PRODUCT_NAME} quality",
             "score_type": "online",
-            "description": f"Runs all scorers on production {AI_PRODUCT_NAME} traces",
+            "description": f"Runs LLM and code scorers on {AI_PRODUCT_NAME} spans",
             "config": {
                 "online": {
                     "sampling_rate": 1.0,
-                    "scorers": [{"type": "function", "id": sid} for sid in scorer_ids],
+                    "scorers": [{"type": "function", "id": sid} for sid in span_scorer_ids],
                     "apply_to_root_span": True,
                     "scope": {"type": "trace"},
                 },
             },
         }
-        resp = requests.post(f"{api_url}/v1/project_score", json=score_rule_payload, headers=headers)
+        resp = requests.post(f"{api_url}/v1/project_score", json=span_rule_payload, headers=headers)
         if resp.ok:
-            print(f"  Created online scoring rule: {AI_PRODUCT_NAME} quality (100% sampling, trace scope)")
+            print(f"  Created online scoring rule: {AI_PRODUCT_NAME} quality (100% sampling)")
         elif resp.status_code == 409:
             print("  Online scoring rule already exists (skipping)")
         else:
-            print(f"  Warning: online scoring rule: {resp.status_code} {resp.text[:200]}")
+            print(f"  Warning: scoring rule: {resp.status_code} {resp.text[:200]}")
+
+    if trace_scorer_ids:
+        trace_rule_payload = {
+            "project_id": project_id,
+            "name": f"{AI_PRODUCT_NAME} thread coherence",
+            "score_type": "online",
+            "description": "Trace-level scorer: waits for full thread, checks cross-span consistency and multi-turn coherence",
+            "config": {
+                "online": {
+                    "sampling_rate": 1.0,
+                    "scorers": [{"type": "function", "id": sid} for sid in trace_scorer_ids],
+                    "scope": {"type": "trace", "idle_seconds": 10},
+                },
+            },
+        }
+        resp = requests.post(f"{api_url}/v1/project_score", json=trace_rule_payload, headers=headers)
+        if resp.ok:
+            print(f"  Created online scoring rule: {AI_PRODUCT_NAME} thread coherence (trace-level, idle_seconds=10)")
+        elif resp.status_code == 409:
+            print("  Online scoring rule already exists (skipping)")
+        else:
+            print(f"  Warning: scoring rule: {resp.status_code} {resp.text[:200]}")
 
 
 def create_facets(project_name: str):
