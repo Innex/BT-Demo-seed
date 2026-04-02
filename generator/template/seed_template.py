@@ -919,7 +919,93 @@ def log_multi_turn_trace(logger, conversation: dict, trace_idx: int, oai_client)
     })
 
 
-def run_experiments(project_name: str, oai_client=None):
+def _run_experiment_row(experiment, row, prompt_ver, model_name, accuracy_base, quality_base, oai_client):
+    scorer_slugs = [s["slug"] for s in SCORERS]
+    row_input = row.get("input", "")
+    row_expected = row.get("expected", "")
+    row_metadata = row.get("metadata", {})
+    feature_mode = row_metadata.get("feature_mode", FEATURE_MODES[0])
+    vertical = row_metadata.get("vertical", CUSTOMER_VERTICALS[0] if CUSTOMER_VERTICALS else "general")
+
+    schema = next((s for s in SCHEMA_CONTEXTS if s["vertical"] == vertical), SCHEMA_CONTEXTS[0])
+    config = TraceConfig(
+        customer_id=f"CUST-{random.randint(10000, 99999)}",
+        vertical=vertical,
+        feature_mode=feature_mode,
+        query_complexity=row_metadata.get("query_complexity", "moderate"),
+        prompt_version=prompt_ver,
+        model=model_name,
+        quality_tier="good",
+        user_query=row_input if isinstance(row_input, str) else str(row_input),
+        schema_context=schema,
+    )
+    system_prompt = build_system_prompt(config)
+    ctx_str = f"Entities: {row_metadata.get('schema_entities', ', '.join(schema['entities']))}\nProperties: {row_metadata.get('schema_properties', ', '.join(schema['properties']))}"
+
+    messages = [{"role": "system", "content": system_prompt + f"\n\nContext:\n{ctx_str}"}]
+    conv_history = row_metadata.get("conversation_history", [])
+    messages.extend(conv_history)
+    user_msg = row_input if isinstance(row_input, str) else str(row_input)
+    messages.append({"role": "user", "content": user_msg})
+
+    with experiment.start_span(name="eval") as span:
+        with span.start_span(name="{{CONTEXT_SPAN_NAME}}", span_attributes={"type": "tool"}) as ctx_span:
+            ctx_span.log(
+                input={"customer_id": config.customer_id},
+                output={"entities": schema["entities"], "properties": schema["properties"]},
+                metadata={"vertical": vertical},
+            )
+
+        response = oai_client.chat.completions.create(
+            model=_get_api_model(model_name), messages=messages,
+        )
+        ai_response = response.choices[0].message.content
+
+        with span.start_span(name="{{VALIDATION_SPAN_NAME}}", span_attributes={"type": "tool"}) as val_span:
+            val_span.log(
+                input={"response": ai_response},
+                output={"valid": True, "issues": [], "confidence": round(random.uniform(0.90, 0.99), 3)},
+            )
+
+        complexity = row_metadata.get("query_complexity", "moderate")
+        complexity_penalty = {"simple": 0.0, "moderate": -0.08, "complex": -0.18}.get(complexity, -0.05)
+        ab, qb = accuracy_base, quality_base
+
+        expected_behavior = row_metadata.get("expected_behavior", "")
+        if expected_behavior in ("schema_mismatch", "missing_property", "taxonomy_gap", "aggregation_ambiguity"):
+            ab -= 0.15
+        if feature_mode == "ambiguous":
+            ab -= 0.10
+
+        scores = {}
+        if len(scorer_slugs) >= 3:
+            scores[scorer_slugs[0]] = round(max(0.0, min(1.0, ab + complexity_penalty + random.uniform(-0.08, 0.08))), 3)
+            scores[scorer_slugs[1]] = round(max(0.0, min(1.0, 0.90 + complexity_penalty * 0.5 + random.uniform(-0.06, 0.06))), 3)
+            scores[scorer_slugs[2]] = round(max(0.0, min(1.0, qb + complexity_penalty * 0.5 + random.uniform(-0.08, 0.08))), 3)
+
+        span.log(
+            input=user_msg,
+            output=ai_response,
+            expected=row_expected,
+            scores=scores,
+            metadata={
+                "prompt_version": prompt_ver,
+                "model": model_name,
+                "feature_mode": feature_mode,
+                "vertical": vertical,
+                "query_complexity": row_metadata.get("query_complexity", "moderate"),
+                "schema_entities": row_metadata.get("schema_entities", ""),
+                "schema_properties": row_metadata.get("schema_properties", ""),
+                "generated_output": str(generate_output(config)),
+                "validation_result": "passed",
+            },
+            tags=row.get("tags", []),
+        )
+
+
+def run_experiments(project_name: str, oai_client=None, parallelism: int = 20):
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     if not oai_client:
         print("\n--- Skipping experiments (OPENAI_API_KEY required) ---")
         return
@@ -932,206 +1018,49 @@ def run_experiments(project_name: str, oai_client=None):
         return
 
     test_rows = dataset_rows[:50]
-    scorer_slugs = [s["slug"] for s in SCORERS]
 
-    for prompt_idx, (prompt_ver, exp_name) in enumerate([
-        (PROMPT_VERSIONS[0], f"Prompt A: {STYLE_A_LABEL}"),
-        (PROMPT_VERSIONS[1], f"Prompt B: {STYLE_B_LABEL}"),
-    ]):
-        print(f"  Running experiment: {exp_name} ({len(test_rows)} test cases)")
+    def run_single_experiment(exp_name, test_rows, prompt_ver, model_name, accuracy_base, quality_base):
+        print(f"  Running experiment: {exp_name} ({len(test_rows)} test cases, parallelism={parallelism})")
         experiment = braintrust.init(project_name, exp_name)
-        for i, row in enumerate(test_rows):
-            row_input = row.get("input", "")
-            row_expected = row.get("expected", "")
-            row_metadata = row.get("metadata", {})
-            feature_mode = row_metadata.get("feature_mode", FEATURE_MODES[0])
-            vertical = row_metadata.get("vertical", CUSTOMER_VERTICALS[0] if CUSTOMER_VERTICALS else "general")
 
-            schema = next((s for s in SCHEMA_CONTEXTS if s["vertical"] == vertical), SCHEMA_CONTEXTS[0])
-            config = TraceConfig(
-                customer_id=f"CUST-{random.randint(10000, 99999)}",
-                vertical=vertical,
-                feature_mode=feature_mode,
-                query_complexity=row_metadata.get("query_complexity", "moderate"),
-                prompt_version=prompt_ver,
-                model="gpt-5-mini",
-                quality_tier="good",
-                user_query=row_input if isinstance(row_input, str) else str(row_input),
-                schema_context=schema,
-            )
-            system_prompt = build_system_prompt(config)
-            ctx_str = f"Entities: {row_metadata.get('schema_entities', ', '.join(schema['entities']))}\nProperties: {row_metadata.get('schema_properties', ', '.join(schema['properties']))}"
-
-            messages = [{"role": "system", "content": system_prompt + f"\n\nContext:\n{ctx_str}"}]
-            conv_history = row_metadata.get("conversation_history", [])
-            messages.extend(conv_history)
-            user_msg = row_input if isinstance(row_input, str) else str(row_input)
-            messages.append({"role": "user", "content": user_msg})
-
-            with experiment.start_span(name="eval") as span:
-                with span.start_span(name="{{CONTEXT_SPAN_NAME}}", span_attributes={"type": "tool"}) as ctx_span:
-                    ctx_span.log(
-                        input={"customer_id": config.customer_id},
-                        output={"entities": schema["entities"], "properties": schema["properties"]},
-                        metadata={"vertical": vertical},
-                    )
-
-                response = oai_client.chat.completions.create(
-                    model=_get_api_model("gpt-5-mini"), messages=messages,
-                )
-                ai_response = response.choices[0].message.content
-
-                with span.start_span(name="{{VALIDATION_SPAN_NAME}}", span_attributes={"type": "tool"}) as val_span:
-                    val_span.log(
-                        input={"response": ai_response},
-                        output={"valid": True, "issues": [], "confidence": round(random.uniform(0.90, 0.99), 3)},
-                    )
-
-                # Compute scores
-                complexity = row_metadata.get("query_complexity", "moderate")
-                complexity_penalty = {"simple": 0.0, "moderate": -0.08, "complex": -0.18}.get(complexity, -0.05)
-                if prompt_idx == 0:
-                    accuracy_base, quality_base = 0.88, 0.72
-                else:
-                    accuracy_base, quality_base = 0.78, 0.85
-
-                expected_behavior = row_metadata.get("expected_behavior", "")
-                if expected_behavior in ("schema_mismatch", "missing_property", "taxonomy_gap", "aggregation_ambiguity"):
-                    accuracy_base -= 0.15
-                if feature_mode == "ambiguous":
-                    accuracy_base -= 0.10
-
-                scores = {}
-                if len(scorer_slugs) >= 3:
-                    scores[scorer_slugs[0]] = round(max(0.0, min(1.0, accuracy_base + complexity_penalty + random.uniform(-0.08, 0.08))), 3)
-                    scores[scorer_slugs[1]] = round(max(0.0, min(1.0, 0.90 + complexity_penalty * 0.5 + random.uniform(-0.06, 0.06))), 3)
-                    scores[scorer_slugs[2]] = round(max(0.0, min(1.0, quality_base + complexity_penalty * 0.5 + random.uniform(-0.08, 0.08))), 3)
-
-                span.log(
-                    input=user_msg,
-                    output=ai_response,
-                    expected=row_expected,
-                    scores=scores,
-                    metadata={
-                        "prompt_version": prompt_ver,
-                        "feature_mode": feature_mode,
-                        "vertical": vertical,
-                        "query_complexity": row_metadata.get("query_complexity", "moderate"),
-                        "model": "gpt-5-mini",
-                        "schema_entities": row_metadata.get("schema_entities", ""),
-                        "schema_properties": row_metadata.get("schema_properties", ""),
-                        "generated_output": str(generate_output(config)),
-                        "validation_result": "passed",
-                    },
-                    tags=row.get("tags", []),
-                )
-
-            if (i + 1) % 10 == 0:
-                print(f"    Progress: {i + 1}/{len(test_rows)}")
+        completed = 0
+        with ThreadPoolExecutor(max_workers=parallelism) as executor:
+            futures = {
+                executor.submit(
+                    _run_experiment_row, experiment, row, prompt_ver, model_name,
+                    accuracy_base, quality_base, oai_client,
+                ): i
+                for i, row in enumerate(test_rows)
+            }
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                    completed += 1
+                    if completed % 10 == 0:
+                        print(f"    Progress: {completed}/{len(test_rows)}")
+                except Exception as e:
+                    print(f"    Error on row {futures[future]}: {e}")
 
         summary = experiment.summarize()
         print(f"    {summary}")
+
+    for prompt_ver, exp_name in [
+        (PROMPT_VERSIONS[0], f"Prompt A: {STYLE_A_LABEL}"),
+        (PROMPT_VERSIONS[1], f"Prompt B: {STYLE_B_LABEL}"),
+    ]:
+        accuracy_base = 0.88 if prompt_ver == PROMPT_VERSIONS[0] else 0.78
+        quality_base = 0.72 if prompt_ver == PROMPT_VERSIONS[0] else 0.85
+        run_single_experiment(exp_name, test_rows, prompt_ver, "gpt-5-mini", accuracy_base, quality_base)
 
     print("  Prompt A/B experiments complete")
 
     print("\n  Running model comparison experiments...")
-    model_configs = ["gpt-5-mini", "gpt-5-nano"]
-
-    for model_name in model_configs:
-        exp_name = f"Model comparison: {model_name}"
-        print(f"  Running experiment: {exp_name}")
-        experiment = braintrust.init(project_name, exp_name)
-
-        for i, row in enumerate(test_rows):
-            row_input = row.get("input", "")
-            row_expected = row.get("expected", "")
-            row_metadata = row.get("metadata", {})
-            feature_mode = row_metadata.get("feature_mode", FEATURE_MODES[0])
-            vertical = row_metadata.get("vertical", CUSTOMER_VERTICALS[0] if CUSTOMER_VERTICALS else "general")
-
-            schema = next((s for s in SCHEMA_CONTEXTS if s["vertical"] == vertical), SCHEMA_CONTEXTS[0])
-            config = TraceConfig(
-                customer_id=f"CUST-{random.randint(10000, 99999)}",
-                vertical=vertical,
-                feature_mode=feature_mode,
-                query_complexity=row_metadata.get("query_complexity", "moderate"),
-                prompt_version=PROMPT_VERSIONS[0],
-                model=model_name,
-                quality_tier="good",
-                user_query=row_input if isinstance(row_input, str) else str(row_input),
-                schema_context=schema,
-            )
-            system_prompt = build_system_prompt(config)
-            ctx_str = f"Entities: {row_metadata.get('schema_entities', ', '.join(schema['entities']))}\nProperties: {row_metadata.get('schema_properties', ', '.join(schema['properties']))}"
-
-            messages = [{"role": "system", "content": system_prompt + f"\n\nContext:\n{ctx_str}"}]
-            conv_history = row_metadata.get("conversation_history", [])
-            messages.extend(conv_history)
-            user_msg = row_input if isinstance(row_input, str) else str(row_input)
-            messages.append({"role": "user", "content": user_msg})
-
-            with experiment.start_span(name="eval") as span:
-                with span.start_span(name="{{CONTEXT_SPAN_NAME}}", span_attributes={"type": "tool"}) as ctx_span:
-                    ctx_span.log(
-                        input={"customer_id": config.customer_id},
-                        output={"entities": schema["entities"], "properties": schema["properties"]},
-                    )
-
-                response = oai_client.chat.completions.create(
-                    model=_get_api_model(model_name), messages=messages,
-                )
-                ai_response = response.choices[0].message.content
-
-                with span.start_span(name="{{VALIDATION_SPAN_NAME}}", span_attributes={"type": "tool"}) as val_span:
-                    val_span.log(
-                        input={"response": ai_response},
-                        output={"valid": True, "issues": [], "confidence": round(random.uniform(0.90, 0.99), 3)},
-                    )
-
-                complexity = row_metadata.get("query_complexity", "moderate")
-                complexity_penalty = {"simple": 0.0, "moderate": -0.08, "complex": -0.18}.get(complexity, -0.05)
-                if model_name == "gpt-5-mini":
-                    accuracy_base = 0.88
-                else:
-                    accuracy_base = 0.82
-                    complexity_penalty *= 1.5
-
-                expected_behavior = row_metadata.get("expected_behavior", "")
-                if expected_behavior in ("schema_mismatch", "missing_property", "taxonomy_gap", "aggregation_ambiguity"):
-                    accuracy_base -= 0.15
-                if feature_mode == "ambiguous":
-                    accuracy_base -= 0.10
-
-                scores = {}
-                if len(scorer_slugs) >= 3:
-                    scores[scorer_slugs[0]] = round(max(0.0, min(1.0, accuracy_base + complexity_penalty + random.uniform(-0.08, 0.08))), 3)
-                    scores[scorer_slugs[1]] = round(max(0.0, min(1.0, 0.90 + complexity_penalty * 0.5 + random.uniform(-0.06, 0.06))), 3)
-                    scores[scorer_slugs[2]] = round(max(0.0, min(1.0, 0.78 + complexity_penalty * 0.5 + random.uniform(-0.08, 0.08))), 3)
-
-                span.log(
-                    input=user_msg,
-                    output=ai_response,
-                    expected=row_expected,
-                    scores=scores,
-                    metadata={
-                        "model": model_name,
-                        "prompt_version": PROMPT_VERSIONS[0],
-                        "feature_mode": feature_mode,
-                        "vertical": vertical,
-                        "query_complexity": row_metadata.get("query_complexity", "moderate"),
-                        "schema_entities": row_metadata.get("schema_entities", ""),
-                        "schema_properties": row_metadata.get("schema_properties", ""),
-                        "generated_output": str(generate_output(config)),
-                        "validation_result": "passed",
-                    },
-                    tags=row.get("tags", []),
-                )
-
-            if (i + 1) % 10 == 0:
-                print(f"    Progress: {i + 1}/{len(test_rows)}")
-
-        summary = experiment.summarize()
-        print(f"    {summary}")
+    for model_name in ["gpt-5-mini", "gpt-5-nano"]:
+        accuracy_base = 0.88 if model_name == "gpt-5-mini" else 0.82
+        run_single_experiment(
+            f"Model comparison: {model_name}", test_rows, PROMPT_VERSIONS[0],
+            model_name, accuracy_base, 0.78,
+        )
 
     print("  All experiments complete — compare in Braintrust UI")
 

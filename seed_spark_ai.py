@@ -1726,7 +1726,100 @@ def log_multi_turn_trace(logger, conversation: dict, trace_idx: int, oai_client)
     })
 
 
-def run_experiments(project_name: str, oai_client=None):
+def _run_experiment_row(experiment, row, prompt_ver, model_name, correctness_base, quality_base, oai_client):
+    row_input = row.get("input", "")
+    row_expected = row.get("expected", "")
+    row_metadata = row.get("metadata", {})
+    report_type = row_metadata.get("report_type", "insights")
+    vertical = row_metadata.get("vertical", "b2b_saas")
+
+    schema = next((s for s in SCHEMA_CONTEXTS if s["vertical"] == vertical), SCHEMA_CONTEXTS[0])
+    config = TraceConfig(
+        customer_id=f"CUST-{random.randint(10000, 99999)}",
+        vertical=vertical,
+        report_type=report_type,
+        query_complexity=row_metadata.get("query_complexity", "moderate"),
+        prompt_version=prompt_ver,
+        model=model_name,
+        quality_tier="good",
+        user_query=row_input if isinstance(row_input, str) else str(row_input),
+        schema_context=schema,
+    )
+    system_prompt = build_system_prompt(config)
+    schema_context_str = f"Events: {row_metadata.get('schema_events', ', '.join(schema['events']))}\nProperties: {row_metadata.get('schema_properties', ', '.join(schema['properties']))}"
+
+    messages = [{"role": "system", "content": system_prompt + f"\n\nProject schema:\n{schema_context_str}"}]
+    conv_history = row_metadata.get("conversation_history", [])
+    messages.extend(conv_history)
+    user_msg = row_input if isinstance(row_input, str) else str(row_input)
+    messages.append({"role": "user", "content": user_msg})
+
+    with experiment.start_span(name="spark-ai-eval") as span:
+        with span.start_span(
+            name="Schema lookup",
+            span_attributes={"type": "tool"},
+        ) as schema_span:
+            schema_span.log(
+                input={"customer_id": config.customer_id},
+                output={"events": schema["events"], "properties": schema["properties"]},
+                metadata={"vertical": vertical},
+            )
+
+        response = oai_client.chat.completions.create(
+            model=_get_api_model(model_name),
+            messages=messages,
+        )
+        spark_response = response.choices[0].message.content
+
+        with span.start_span(
+            name="Query validation",
+            span_attributes={"type": "tool"},
+        ) as val_span:
+            val_span.log(
+                input={"response": spark_response},
+                output={"valid": True, "issues": [], "confidence": round(random.uniform(0.90, 0.99), 3)},
+                metadata={"validator_version": "v2.1"},
+            )
+
+        complexity = row_metadata.get("query_complexity", "moderate")
+        complexity_penalty = {"simple": 0.0, "moderate": -0.08, "complex": -0.18}.get(complexity, -0.05)
+        cb, qb = correctness_base, quality_base
+
+        expected_behavior = row_metadata.get("expected_behavior", "")
+        if expected_behavior in ("schema_mismatch", "missing_property", "taxonomy_gap", "aggregation_ambiguity"):
+            cb -= 0.15
+        if report_type == "ambiguous":
+            cb -= 0.10
+
+        scores = {
+            "query_correctness": round(max(0.0, min(1.0, cb + complexity_penalty + random.uniform(-0.08, 0.08))), 3),
+            "schema_adherence": round(max(0.0, min(1.0, 0.90 + complexity_penalty * 0.5 + random.uniform(-0.06, 0.06))), 3),
+            "response_quality": round(max(0.0, min(1.0, qb + complexity_penalty * 0.5 + random.uniform(-0.08, 0.08))), 3),
+        }
+
+        span.log(
+            input=user_msg,
+            output=spark_response,
+            expected=row_expected,
+            scores=scores,
+            metadata={
+                "prompt_version": prompt_ver,
+                "model": model_name,
+                "report_type": report_type,
+                "vertical": vertical,
+                "query_complexity": row_metadata.get("query_complexity", "moderate"),
+                "schema_events": row_metadata.get("schema_events", ""),
+                "schema_properties": row_metadata.get("schema_properties", ""),
+                "generated_query": str(generate_query_output(config)),
+                "validation_result": "passed",
+            },
+            tags=row.get("tags", []),
+        )
+
+
+def run_experiments(project_name: str, oai_client=None, parallelism: int = 20):
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     if not oai_client:
         print("\n--- Skipping experiments (OPENAI_API_KEY required for real LLM calls) ---")
         return
@@ -1740,224 +1833,49 @@ def run_experiments(project_name: str, oai_client=None):
 
     test_rows = dataset_rows[:50]
 
+    def run_single_experiment(exp_name, test_rows, prompt_ver, model_name, correctness_base, quality_base):
+        print(f"  Running experiment: {exp_name} ({len(test_rows)} test cases, parallelism={parallelism})")
+        experiment = braintrust.init(project_name, exp_name)
+
+        completed = 0
+        with ThreadPoolExecutor(max_workers=parallelism) as executor:
+            futures = {
+                executor.submit(
+                    _run_experiment_row, experiment, row, prompt_ver, model_name,
+                    correctness_base, quality_base, oai_client,
+                ): i
+                for i, row in enumerate(test_rows)
+            }
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                    completed += 1
+                    if completed % 10 == 0:
+                        print(f"    Progress: {completed}/{len(test_rows)}")
+                except Exception as e:
+                    print(f"    Error on row {futures[future]}: {e}")
+
+        summary = experiment.summarize()
+        print(f"    {summary}")
+
     for prompt_ver, exp_name in [
         ("v3.1-structured", "Prompt A: Structured query style"),
         ("v3.2-conversational", "Prompt B: Conversational insight style"),
     ]:
-        print(f"  Running experiment: {exp_name} ({len(test_rows)} test cases)")
-        experiment = braintrust.init(project_name, exp_name)
-
-        for i, row in enumerate(test_rows):
-            row_input = row.get("input", "")
-            row_expected = row.get("expected", "")
-            row_metadata = row.get("metadata", {})
-            report_type = row_metadata.get("report_type", "insights")
-            vertical = row_metadata.get("vertical", "b2b_saas")
-
-            schema = next((s for s in SCHEMA_CONTEXTS if s["vertical"] == vertical), SCHEMA_CONTEXTS[0])
-            config = TraceConfig(
-                customer_id=f"CUST-{random.randint(10000, 99999)}",
-                vertical=vertical,
-                report_type=report_type,
-                query_complexity=row_metadata.get("query_complexity", "moderate"),
-                prompt_version=prompt_ver,
-                model="gpt-5-mini",
-                quality_tier="good",
-                user_query=row_input if isinstance(row_input, str) else str(row_input),
-                schema_context=schema,
-            )
-            system_prompt = build_system_prompt(config)
-            schema_context_str = f"Events: {row_metadata.get('schema_events', ', '.join(schema['events']))}\nProperties: {row_metadata.get('schema_properties', ', '.join(schema['properties']))}"
-
-            messages = [{"role": "system", "content": system_prompt + f"\n\nProject schema:\n{schema_context_str}"}]
-            conv_history = row_metadata.get("conversation_history", [])
-            messages.extend(conv_history)
-            user_msg = row_input if isinstance(row_input, str) else str(row_input)
-            messages.append({"role": "user", "content": user_msg})
-
-            with experiment.start_span(name="spark-ai-eval") as span:
-                with span.start_span(
-                    name="Schema lookup",
-                    span_attributes={"type": "tool"},
-                ) as schema_span:
-                    schema_span.log(
-                        input={"customer_id": config.customer_id},
-                        output={"events": schema["events"], "properties": schema["properties"]},
-                        metadata={"vertical": vertical},
-                    )
-
-                response = oai_client.chat.completions.create(
-                    model=_get_api_model("gpt-5-mini"),
-                    messages=messages,
-                )
-                spark_response = response.choices[0].message.content
-
-                with span.start_span(
-                    name="Query validation",
-                    span_attributes={"type": "tool"},
-                ) as val_span:
-                    val_span.log(
-                        input={"response": spark_response},
-                        output={"valid": True, "issues": [], "confidence": round(random.uniform(0.90, 0.99), 3)},
-                        metadata={"validator_version": "v2.1"},
-                    )
-
-                # Score variation by prompt style and query complexity
-                complexity = row_metadata.get("query_complexity", "moderate")
-                complexity_penalty = {"simple": 0.0, "moderate": -0.08, "complex": -0.18}.get(complexity, -0.05)
-                # Structured prompts score higher on correctness, conversational on response quality
-                if prompt_ver == "v3.1-structured":
-                    correctness_base, quality_base = 0.88, 0.72
-                else:
-                    correctness_base, quality_base = 0.78, 0.85
-                # Schema mismatch and ambiguous rows should score lower
-                expected_behavior = row_metadata.get("expected_behavior", "")
-                if expected_behavior in ("schema_mismatch", "missing_property", "taxonomy_gap", "aggregation_ambiguity"):
-                    correctness_base -= 0.15
-                if report_type == "ambiguous":
-                    correctness_base -= 0.10
-
-                scores = {
-                    "query_correctness": round(max(0.0, min(1.0, correctness_base + complexity_penalty + random.uniform(-0.08, 0.08))), 3),
-                    "schema_adherence": round(max(0.0, min(1.0, 0.90 + complexity_penalty * 0.5 + random.uniform(-0.06, 0.06))), 3),
-                    "response_quality": round(max(0.0, min(1.0, quality_base + complexity_penalty * 0.5 + random.uniform(-0.08, 0.08))), 3),
-                }
-
-                span.log(
-                    input=user_msg,
-                    output=spark_response,
-                    expected=row_expected,
-                    scores=scores,
-                    metadata={
-                        "prompt_version": prompt_ver,
-                        "report_type": report_type,
-                        "vertical": vertical,
-                        "query_complexity": row_metadata.get("query_complexity", "moderate"),
-                        "model": "gpt-5-mini",
-                        "schema_events": row_metadata.get("schema_events", ""),
-                        "schema_properties": row_metadata.get("schema_properties", ""),
-                        "generated_query": str(generate_query_output(config)),
-                        "validation_result": "passed",
-                    },
-                    tags=row.get("tags", []),
-                )
-
-            if (i + 1) % 10 == 0:
-                print(f"    Progress: {i + 1}/{len(test_rows)}")
-
-        summary = experiment.summarize()
-        print(f"    {summary}")
+        correctness_base = 0.88 if prompt_ver == "v3.1-structured" else 0.78
+        quality_base = 0.72 if prompt_ver == "v3.1-structured" else 0.85
+        run_single_experiment(exp_name, test_rows, prompt_ver, "gpt-5-mini", correctness_base, quality_base)
 
     print("  Prompt A/B experiments complete")
 
     print("\n  Running model comparison experiments...")
-    model_configs = ["gpt-5-mini", "gpt-5-nano"]
-
-    for model_name in model_configs:
-        exp_name = f"Model comparison: {model_name}"
-        print(f"  Running experiment: {exp_name}")
-        experiment = braintrust.init(project_name, exp_name)
-
-        for i, row in enumerate(test_rows):
-            row_input = row.get("input", "")
-            row_expected = row.get("expected", "")
-            row_metadata = row.get("metadata", {})
-            report_type = row_metadata.get("report_type", "insights")
-            vertical = row_metadata.get("vertical", "b2b_saas")
-
-            schema = next((s for s in SCHEMA_CONTEXTS if s["vertical"] == vertical), SCHEMA_CONTEXTS[0])
-            config = TraceConfig(
-                customer_id=f"CUST-{random.randint(10000, 99999)}",
-                vertical=vertical,
-                report_type=report_type,
-                query_complexity=row_metadata.get("query_complexity", "moderate"),
-                prompt_version="v3.1-structured",
-                model=model_name,
-                quality_tier="good",
-                user_query=row_input if isinstance(row_input, str) else str(row_input),
-                schema_context=schema,
-            )
-            system_prompt = build_system_prompt(config)
-            schema_context_str = f"Events: {row_metadata.get('schema_events', ', '.join(schema['events']))}\nProperties: {row_metadata.get('schema_properties', ', '.join(schema['properties']))}"
-
-            messages = [{"role": "system", "content": system_prompt + f"\n\nProject schema:\n{schema_context_str}"}]
-            conv_history = row_metadata.get("conversation_history", [])
-            messages.extend(conv_history)
-            user_msg = row_input if isinstance(row_input, str) else str(row_input)
-            messages.append({"role": "user", "content": user_msg})
-
-            with experiment.start_span(name="spark-ai-eval") as span:
-                with span.start_span(
-                    name="Schema lookup",
-                    span_attributes={"type": "tool"},
-                ) as schema_span:
-                    schema_span.log(
-                        input={"customer_id": config.customer_id},
-                        output={"events": schema["events"], "properties": schema["properties"]},
-                        metadata={"vertical": vertical},
-                    )
-
-                response = oai_client.chat.completions.create(
-                    model=_get_api_model(model_name),
-                    messages=messages,
-                )
-                spark_response = response.choices[0].message.content
-
-                with span.start_span(
-                    name="Query validation",
-                    span_attributes={"type": "tool"},
-                ) as val_span:
-                    val_span.log(
-                        input={"response": spark_response},
-                        output={"valid": True, "issues": [], "confidence": round(random.uniform(0.90, 0.99), 3)},
-                        metadata={"validator_version": "v2.1"},
-                    )
-
-                # Model-specific score profiles: mini is better overall, nano trades quality for speed/cost
-                complexity = row_metadata.get("query_complexity", "moderate")
-                complexity_penalty = {"simple": 0.0, "moderate": -0.08, "complex": -0.18}.get(complexity, -0.05)
-                if model_name == "gpt-5-mini":
-                    correctness_base = 0.88
-                else:  # nano — cheaper but less accurate on complex queries
-                    correctness_base = 0.82
-                    complexity_penalty *= 1.5  # nano degrades more on complex queries
-
-                expected_behavior = row_metadata.get("expected_behavior", "")
-                if expected_behavior in ("schema_mismatch", "missing_property", "taxonomy_gap", "aggregation_ambiguity"):
-                    correctness_base -= 0.15
-                if report_type == "ambiguous":
-                    correctness_base -= 0.10
-
-                scores = {
-                    "query_correctness": round(max(0.0, min(1.0, correctness_base + complexity_penalty + random.uniform(-0.08, 0.08))), 3),
-                    "schema_adherence": round(max(0.0, min(1.0, 0.90 + complexity_penalty * 0.5 + random.uniform(-0.06, 0.06))), 3),
-                    "response_quality": round(max(0.0, min(1.0, 0.78 + complexity_penalty * 0.5 + random.uniform(-0.08, 0.08))), 3),
-                }
-
-                span.log(
-                    input=user_msg,
-                    output=spark_response,
-                    expected=row_expected,
-                    scores=scores,
-                    metadata={
-                        "model": model_name,
-                        "prompt_version": "v3.1-structured",
-                        "report_type": report_type,
-                        "vertical": vertical,
-                        "query_complexity": row_metadata.get("query_complexity", "moderate"),
-                        "schema_events": row_metadata.get("schema_events", ""),
-                        "schema_properties": row_metadata.get("schema_properties", ""),
-                        "generated_query": str(generate_query_output(config)),
-                        "validation_result": "passed",
-                    },
-                    tags=row.get("tags", []),
-                )
-
-            if (i + 1) % 10 == 0:
-                print(f"    Progress: {i + 1}/{len(test_rows)}")
-
-        summary = experiment.summarize()
-        print(f"    {summary}")
+    for model_name in ["gpt-5-mini", "gpt-5-nano"]:
+        correctness_base = 0.88 if model_name == "gpt-5-mini" else 0.82
+        quality_base = 0.78
+        run_single_experiment(
+            f"Model comparison: {model_name}", test_rows, "v3.1-structured",
+            model_name, correctness_base, quality_base,
+        )
 
     print("  All experiments complete — compare in Braintrust UI")
 
