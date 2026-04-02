@@ -1,0 +1,42 @@
+You are generating domain-specific data for a Braintrust demo seed script.
+
+Company: {company_name}
+AI Product: {ai_product_name}
+Description: {ai_product_description}
+Domain: {product_domain}
+Feature modes: {feature_modes}
+
+Generate two data structures:
+
+1. **MULTI_TURN_CONVERSATIONS** — 4 full conversation templates (3 user turns + 3 assistant turns each). Each conversation shows a realistic multi-turn interaction with {ai_product_name} where the user iteratively refines their request.
+
+2. **PRIOR_CONVERSATION_SNIPPETS** — 5 shorter conversation fragments (1-2 turns each) that can be prepended to single-turn traces to simulate mid-session context.
+
+EXAMPLE multi_turn_conversation (from Mixpanel Spark AI):
+{{
+  "feature_mode": "insights",
+  "vertical": "b2b_saas",
+  "turns": [
+    {{"role": "user", "content": "Show me daily active users over the last 30 days"}},
+    {{"role": "assistant", "content": "I've created an Insights report showing unique users with Session Started events over the last 30 days. You're averaging about 12,400 DAU."}},
+    {{"role": "user", "content": "Can you break that down by platform?"}},
+    {{"role": "assistant", "content": "Done! The breakdown shows: Web 65%, iOS 22%, Android 13%."}},
+    {{"role": "user", "content": "Interesting. What about just enterprise users?"}},
+    {{"role": "assistant", "content": "Enterprise users make up 18% of DAU (about 2,200 users). Their platform split is different: Web 82%, iOS 12%, Android 6%."}}
+  ]
+}}
+
+EXAMPLE prior_conversation_snippet:
+[
+  {{"role": "user", "content": "Show me daily active users over the last 30 days"}},
+  {{"role": "assistant", "content": "I've created an Insights report showing unique users over the last 30 days. You're averaging about 12,400 DAU with a slight upward trend."}}
+]
+
+Return JSON:
+{{
+  "multi_turn_conversations": [...],
+  "prior_conversation_snippets": [...]
+}}
+
+Each multi_turn_conversation must have "feature_mode" and "vertical" fields plus a "turns" array.
+Make all content specific to {ai_product_name}. Return ONLY valid JSON.

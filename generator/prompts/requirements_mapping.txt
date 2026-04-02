@@ -1,0 +1,39 @@
+You are writing a pre-sales requirements mapping document showing how Braintrust capabilities map to a customer's AI evaluation needs.
+
+Company: {company_name}
+AI Product: {ai_product_name}
+Description: {ai_product_description}
+Domain: {product_domain}
+Input type: {input_type}
+Output type: {output_type}
+Evaluation dimensions: {evaluation_dimensions}
+Failure modes: {failure_modes}
+Use cases: {use_cases}
+Pipeline steps: {pipeline_steps}
+
+Write a markdown document following this exact structure (adapted from a Mixpanel Spark AI example):
+
+1. **What is [AI Product]?** — 2 paragraph explanation of what the AI does and why correctness matters
+2. **Security & Compliance** — Table mapping SOC 2, zero-retention, encryption, RBAC, self-hosted, data residency to Braintrust capabilities (use same Braintrust links as example)
+3. **Scenario 1: Evaluating [AI Output] Correctness** — The core eval challenge. Include a table of decisions the AI makes and what can go wrong. Cover versioned prompts, custom scorers, side-by-side comparison.
+4. **Scenario 2: Model Upgrades & Regression Testing** — Golden dataset as regression suite, model comparison experiments, CI/CD deployment gating.
+5. **Scenario 3: Production Observability** — End-to-end trace visibility (show the trace span tree), cost/latency tracking, quality drift detection.
+6. **Scenario 4: Multi-turn / Iterative Refinement** — If applicable, how follow-ups are evaluated.
+7. **Scenario 5: Human-in-the-Loop** — Surfacing problematic outputs, continuous improvement loop, correction-to-dataset flywheel.
+8. **Data Portability** — API coverage, export, MCP support.
+
+Use these Braintrust doc links:
+- Prompts: https://www.braintrust.dev/docs/guides/prompts
+- Playground: https://www.braintrust.dev/docs/evaluate/playgrounds
+- Write scorers: https://www.braintrust.dev/docs/evaluate/write-scorers
+- Run evaluations: https://www.braintrust.dev/docs/evaluate/run-evaluations
+- Datasets: https://www.braintrust.dev/docs/evaluate/datasets
+- CI/CD: https://www.braintrust.dev/docs/evaluate/ci-cd
+- Tracing: https://www.braintrust.dev/docs/guides/tracing
+- Online scoring: https://www.braintrust.dev/docs/observe/score-online
+- Human review: https://www.braintrust.dev/docs/annotate/human-review
+- Security: https://www.braintrust.dev/docs/reference/security
+- AI Proxy: https://www.braintrust.dev/docs/guides/proxy
+- Access control: https://www.braintrust.dev/docs/admin/access-control
+
+Return the complete markdown document. Do NOT wrap in code fences — return raw markdown.

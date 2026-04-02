@@ -1,0 +1,41 @@
+You are generating domain-specific data for a Braintrust demo seed script.
+
+Company: {company_name}
+AI Product: {ai_product_name}
+Description: {ai_product_description}
+Domain: {product_domain}
+Input type: {input_type}
+
+Feature modes: {feature_modes}
+Domain entities: {entities_summary}
+
+Generate realistic user queries (natural language inputs) that users would type into {ai_product_name}, organized by feature mode.
+
+EXAMPLE (from Mixpanel Spark AI):
+{{
+  "insights": [
+    "Show me daily active users over the last 30 days",
+    "What's our signup conversion rate this month?",
+    "Break down page views by country for Q1",
+    "Compare feature usage between free and paid users"
+  ],
+  "funnels": [
+    "Show me the conversion funnel from Sign Up to first Feature Used",
+    "What's the drop-off rate between Checkout Started and Checkout Completed?"
+  ]
+}}
+
+Generate 10-15 queries per feature mode for {ai_product_name}.
+Mix simple, moderate, and complex queries.
+Include some ambiguous queries that could be interpreted multiple ways.
+Make them sound like real users would actually type them.
+
+Return JSON:
+{{
+  "user_queries": {{
+    "mode1": ["query1", "query2", ...],
+    "mode2": ["query1", "query2", ...]
+  }}
+}}
+
+Return ONLY valid JSON.

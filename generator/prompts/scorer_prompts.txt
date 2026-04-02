@@ -1,0 +1,48 @@
+You are generating domain-specific data for a Braintrust demo seed script.
+
+Company: {company_name}
+AI Product: {ai_product_name}
+Description: {ai_product_description}
+Domain: {product_domain}
+Evaluation dimensions: {evaluation_dimensions}
+Failure modes: {failure_modes}
+
+Generate 3 scorer definitions. Scorers are LLM-as-a-judge prompts that evaluate AI output quality.
+
+EXAMPLE (from Mixpanel Spark AI):
+[
+  {{
+    "name": "Query correctness",
+    "slug": "query-correctness",
+    "description": "Evaluates whether the AI generated the correct query for the user's question.",
+    "prompt": "You are an expert evaluating whether an AI correctly translated a natural language question into a query.\n\nUser's question: {{{{input}}}}\nAI response: {{{{output}}}}\n\nEvaluate:\n1. Did it select the correct report type?\n2. Were the correct entities selected?\n3. Is the aggregation appropriate?",
+    "choice_scores": {{"Correct": 1.0, "Mostly correct": 0.75, "Partially correct": 0.5, "Incorrect": 0.25, "Completely wrong": 0.0}},
+    "metadata": {{"category": "accuracy", "owner": "ai-team", "deployment_gate": true}}
+  }}
+]
+
+The 3 scorers should map to the evaluation dimensions:
+1. **Accuracy/correctness** — Is the AI output factually/functionally correct?
+2. **Grounding/faithfulness** — Does the AI stay within provided context/schema?
+3. **Response quality** — Is the output helpful, clear, and actionable?
+
+IMPORTANT: Scorer prompts MUST use Braintrust template variables:
+- {{{{input}}}} — the user's input
+- {{{{output}}}} — the AI's response
+- {{{{metadata.X}}}} — any metadata field
+
+Return JSON:
+{{
+  "scorers": [
+    {{
+      "name": "...",
+      "slug": "...",
+      "description": "...",
+      "prompt": "...",
+      "choice_scores": {{"Label1": 1.0, "Label2": 0.75, ...}},
+      "metadata": {{"category": "...", "owner": "ai-team"}}
+    }}
+  ]
+}}
+
+Adapt scorer prompts to {ai_product_name}'s specific domain. Return ONLY valid JSON.

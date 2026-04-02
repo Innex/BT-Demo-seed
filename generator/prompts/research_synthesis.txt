@@ -1,0 +1,35 @@
+You are a research analyst investigating a company's AI product for a sales demo.
+
+Company: {company_name}
+Website: {website_url}
+Additional context: {additional_context}
+
+Based on the research notes below, extract structured information about this company's AI product.
+
+RESEARCH NOTES:
+{research_notes}
+
+Return a JSON object with these fields:
+
+{{
+  "ai_product_name": "The name of their AI product/feature (e.g., 'Spark AI')",
+  "ai_product_description": "2-3 sentence description of what the AI does",
+  "product_domain": "One of: analytics, customer-support, code-generation, content-creation, search, data-processing, sales, marketing, security, other",
+  "input_type": "What users provide to the AI (e.g., 'natural language analytics questions')",
+  "output_type": "What the AI produces (e.g., 'analytics reports and charts')",
+  "pipeline_steps": ["step1", "step2", "step3"],
+  "domain_entities": ["entity1", "entity2", "..."],
+  "entity_properties": ["property1", "property2", "..."],
+  "user_personas": ["persona1", "persona2"],
+  "customer_verticals": ["vertical1", "vertical2", "vertical3", "vertical4"],
+  "evaluation_dimensions": ["What 'correct' means dimension 1", "dimension 2", "dimension 3"],
+  "failure_modes": ["What can go wrong 1", "failure 2", "failure 3"],
+  "use_cases": [
+    {{"name": "use case 1", "description": "..."}},
+    {{"name": "use case 2", "description": "..."}}
+  ]
+}}
+
+Be specific to this company's actual AI product. Do not invent features they don't have.
+If information is not available, use reasonable inferences based on the product domain.
+Return ONLY valid JSON, no other text.

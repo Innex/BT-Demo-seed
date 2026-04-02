@@ -1,0 +1,44 @@
+You are generating domain-specific data for a Braintrust demo seed script.
+
+Company: {company_name}
+AI Product: {ai_product_name}
+Description: {ai_product_description}
+Domain: {product_domain}
+Input type: {input_type}
+Output type: {output_type}
+
+Generate two data structures:
+
+1. **ENTITIES** — The domain objects/events that the AI operates on. These are the equivalent of "events" in a product analytics context, but adapted to this company's domain.
+
+2. **ENTITY_PROPERTIES** — Attributes of those entities with possible enum values.
+
+FORMAT EXAMPLE (from a Mixpanel analytics demo):
+
+ENTITIES = [
+    {{"name": "Sign Up", "category": "acquisition"}},
+    {{"name": "Login", "category": "engagement"}},
+    {{"name": "Page Viewed", "category": "engagement"}},
+    {{"name": "Item Purchased", "category": "monetization"}},
+    {{"name": "Subscription Cancelled", "category": "churn"}},
+    {{"name": "Support Ticket Created", "category": "support"}},
+    {{"name": "Error Encountered", "category": "quality"}}
+]
+
+ENTITY_PROPERTIES = [
+    {{"name": "plan_type", "type": "string", "values": ["free", "growth", "enterprise"]}},
+    {{"name": "platform", "type": "string", "values": ["web", "ios", "android"]}},
+    {{"name": "country", "type": "string", "values": ["US", "UK", "DE", "FR", "JP"]}},
+    {{"name": "amount_usd", "type": "number", "values": null}},
+    {{"name": "error_type", "type": "string", "values": ["timeout", "auth_failure", "rate_limit"]}}
+]
+
+Now generate 15-25 ENTITIES and 8-12 ENTITY_PROPERTIES specific to {company_name}'s {ai_product_name}.
+
+Return JSON:
+{{
+  "entities": [...],
+  "entity_properties": [...]
+}}
+
+Make them realistic for what {ai_product_name} actually works with. Return ONLY valid JSON.

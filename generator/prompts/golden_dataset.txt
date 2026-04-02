@@ -1,0 +1,62 @@
+You are generating domain-specific data for a Braintrust demo seed script.
+
+Company: {company_name}
+AI Product: {ai_product_name}
+Description: {ai_product_description}
+Domain: {product_domain}
+Feature modes: {feature_modes}
+Entities: {entities_summary}
+Properties: {properties_summary}
+Schema contexts: {schema_contexts_summary}
+
+Generate 30-40 golden dataset rows — curated test cases for regression testing. Each row tests whether {ai_product_name} handles a specific type of query correctly.
+
+EXAMPLE ROW (from Mixpanel Spark AI):
+{{
+  "input": "Show me daily active users over the last 30 days",
+  "expected": "{{\"report_type\": \"insights\", \"events\": [{{\"event\": \"Session Started\", \"aggregation\": \"unique_users\"}}], \"time_range\": \"30d\"}}",
+  "metadata": {{
+    "feature_mode": "insights",
+    "query_complexity": "simple",
+    "vertical": "b2b_saas",
+    "schema_entities": "Sign Up, Login, Feature Used, Session Started",
+    "schema_properties": "plan_type, platform, country"
+  }},
+  "tags": ["insights", "simple", "dau"]
+}}
+
+COVERAGE REQUIREMENTS:
+- At least 5 rows per feature mode
+- Mix of simple, moderate, and complex queries
+- 2-3 rows for ambiguous/unclear queries (expected should explain how to clarify)
+- 2-3 rows for schema mismatches (user asks about entities that don't exist)
+- 3-4 multi-turn rows with conversation_history in metadata
+- Include "schema_entities" and "schema_properties" in every row's metadata
+- Tags should include feature_mode, complexity, and topic
+
+Multi-turn row example:
+{{
+  "input": "Can you also break that down by platform?",
+  "expected": "{{\"action\": \"Add breakdown by platform to existing report\"}}",
+  "metadata": {{
+    "feature_mode": "insights",
+    "query_complexity": "simple",
+    "vertical": "b2b_saas",
+    "schema_entities": "Sign Up, Login",
+    "schema_properties": "plan_type, platform",
+    "is_multi_turn": true,
+    "turn_count": 3,
+    "conversation_history": [
+      {{"role": "user", "content": "Show me daily active users"}},
+      {{"role": "assistant", "content": "I've created a report showing DAU..."}}
+    ]
+  }},
+  "tags": ["multi_turn", "insights", "follow_up"]
+}}
+
+Return JSON:
+{{
+  "golden_dataset_rows": [...]
+}}
+
+Make all content specific to {ai_product_name}'s domain. Return ONLY valid JSON.

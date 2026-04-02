@@ -1,0 +1,36 @@
+You are generating domain-specific data for a Braintrust demo seed script.
+
+Company: {company_name}
+AI Product: {ai_product_name}
+Domain: {product_domain}
+Customer verticals: {customer_verticals}
+All entities: {entities_summary}
+All properties: {properties_summary}
+
+Generate 4 schema contexts — one per customer vertical. Each represents a different type of customer using {ai_product_name}, with a relevant subset of entities and properties.
+
+EXAMPLE (from Mixpanel Spark AI):
+[
+  {{
+    "vertical": "b2b_saas",
+    "entities": ["Sign Up", "Login", "Feature Used", "Plan Upgraded", "Subscription Started", "Subscription Cancelled", "Invite Sent", "Report Generated"],
+    "properties": ["plan_type", "platform", "country", "feature_name", "referral_source"]
+  }},
+  {{
+    "vertical": "ecommerce",
+    "entities": ["Sign Up", "Page Viewed", "Search Performed", "Item Purchased", "Checkout Started", "Checkout Completed", "Cart Abandoned"],
+    "properties": ["platform", "country", "referral_source", "amount_usd", "browser"]
+  }}
+]
+
+Each schema context should:
+- Have 6-10 entities (a realistic subset, not all of them)
+- Have 4-6 properties (relevant to that vertical)
+- Represent a believable customer segment for {ai_product_name}
+
+Return JSON:
+{{
+  "schema_contexts": [...]
+}}
+
+Return ONLY valid JSON.

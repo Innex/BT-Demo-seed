@@ -1,0 +1,31 @@
+You are generating domain-specific data for a Braintrust demo seed script.
+
+Company: {company_name}
+AI Product: {ai_product_name}
+Description: {ai_product_description}
+Domain: {product_domain}
+
+Generate the AI product's "feature modes" — the distinct categories of tasks/outputs the AI handles.
+
+EXAMPLE (from Mixpanel Spark AI — an analytics product):
+Feature modes: ["insights", "funnels", "retention", "flows"]
+These are the 4 report types Spark AI can generate.
+
+EXAMPLE (for a customer support AI):
+Feature modes: ["ticket_resolution", "knowledge_search", "escalation_routing", "summary_generation"]
+
+EXAMPLE (for a code generation AI):
+Feature modes: ["code_generation", "code_refactoring", "bug_detection", "code_explanation"]
+
+Now generate 3-5 feature modes for {company_name}'s {ai_product_name}.
+
+Return JSON:
+{{
+  "feature_modes": ["mode1", "mode2", "mode3", "mode4"],
+  "feature_mode_weights": [0.35, 0.25, 0.25, 0.15],
+  "customer_verticals": ["vertical1", "vertical2", "vertical3", "vertical4"]
+}}
+
+The weights should sum to 1.0 and reflect realistic usage distribution.
+Customer verticals are the types of companies that use {ai_product_name}.
+Return ONLY valid JSON.

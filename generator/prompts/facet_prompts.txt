@@ -1,0 +1,52 @@
+You are generating domain-specific data for a Braintrust demo seed script.
+
+Company: {company_name}
+AI Product: {ai_product_name}
+Description: {ai_product_description}
+Domain: {product_domain}
+Feature modes: {feature_modes}
+Failure modes: {failure_modes}
+
+Generate 4 facet definitions. Facets are LLM classifiers that extract structured labels from traces for topic clustering.
+
+EXAMPLE (from Mixpanel Spark AI):
+[
+  {{
+    "name": "Report type requested",
+    "slug": "report-type-requested",
+    "description": "Classifies which report type the user's query maps to",
+    "prompt": "What type of report is the user asking for?\n\nRespond with a single label:\n- Insights — trends, counts, aggregations\n- Funnels — conversion paths\n- Retention — user retention tracking\n- Flows — user journey visualization\n- Ambiguous — could map to multiple types\n\nIf not about analytics, respond: \"NONE\"",
+    "no_match_pattern": "^NONE"
+  }},
+  {{
+    "name": "Query complexity",
+    "slug": "query-complexity",
+    "description": "Assesses how complex the query is",
+    "prompt": "Assess the complexity...\n\nUse these exact labels:\n- Simple. [reason]\n- Moderate. [reason]\n- Complex. [reason]\n\nAlways include a 1-sentence reason."
+  }},
+  {{
+    "name": "Failure mode",
+    "slug": "failure-mode",
+    "description": "Classifies the type of error when the AI makes a mistake",
+    "prompt": "If the AI made an error, classify the failure mode...\n\nUse these exact labels:\n- Wrong entity. [reason]\n- Wrong aggregation. [reason]\n- No error. The output appears correct."
+  }},
+  {{
+    "name": "Customer vertical",
+    "slug": "customer-vertical",
+    "description": "Identifies the customer's industry",
+    "prompt": "Based on context, what industry vertical does this belong to?..."
+  }}
+]
+
+Generate 4 facets adapted to {ai_product_name}:
+1. **Feature mode classification** — which capability/mode was the user requesting?
+2. **Complexity assessment** — how hard is this request?
+3. **Failure mode classification** — what went wrong (if anything)?
+4. **Customer/usage segment** — what type of user or use case is this?
+
+Return JSON:
+{{
+  "facets": [...]
+}}
+
+Return ONLY valid JSON.

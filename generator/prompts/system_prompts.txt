@@ -1,0 +1,37 @@
+You are generating domain-specific data for a Braintrust demo seed script.
+
+Company: {company_name}
+AI Product: {ai_product_name}
+Description: {ai_product_description}
+Domain: {product_domain}
+Input type: {input_type}
+Output type: {output_type}
+Feature modes: {feature_modes}
+Evaluation dimensions: {evaluation_dimensions}
+
+Generate:
+1. A **system prompt base** — the core instructions for the AI product
+2. A **style A suffix** — precise, structured, technical response style
+3. A **style B suffix** — conversational, insight-driven, friendly style
+4. Style names for each (e.g., "structured" and "conversational", or "concise" and "detailed")
+
+EXAMPLE (from Mixpanel Spark AI):
+
+system_prompt_base: "You are Spark AI, Mixpanel's natural language analytics assistant. You translate user questions into Mixpanel reports (Insights, Funnels, Retention, Flows). You have access to the user's project schema: event names, event properties, and user properties.\n\nRules:\n- Only reference events and properties that exist in the project schema\n- Select the correct report type for the question\n- If the user's question is ambiguous, pick the most likely interpretation\n\nProject schema:\nEvents: {{{{metadata.schema_entities}}}}\nProperties: {{{{metadata.schema_properties}}}}"
+
+style_a_suffix: "\n\nStyle: Be precise and query-focused. Lead with the report configuration. Keep it concise."
+
+style_b_suffix: "\n\nStyle: Be explanatory and insight-driven. Highlight patterns. Ask follow-up questions."
+
+IMPORTANT: The system prompt should include Braintrust template variables {{{{metadata.schema_entities}}}} and {{{{metadata.schema_properties}}}} for dynamic schema injection.
+
+Return JSON:
+{{
+  "system_prompt_base": "...",
+  "style_a_name": "structured",
+  "style_a_suffix": "...",
+  "style_b_name": "conversational",
+  "style_b_suffix": "..."
+}}
+
+Adapt to {ai_product_name}'s specific domain and capabilities. Return ONLY valid JSON.

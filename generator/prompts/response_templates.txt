@@ -1,0 +1,40 @@
+You are generating domain-specific data for a Braintrust demo seed script.
+
+Company: {company_name}
+AI Product: {ai_product_name}
+Description: {ai_product_description}
+Domain: {product_domain}
+Output type: {output_type}
+
+Generate two sets of AI response templates (4 each) plus insight and detail snippets.
+
+The templates use Python string format placeholders: {{feature_mode}}, {{details}}, {{time_range}}, {{breakdown_note}}, {{aggregation}}, {{breakdown}}, {{insight}}.
+
+EXAMPLE (from Mixpanel Spark AI — structured style):
+"I've created an {{feature_mode}} report for you. {{details}} The query covers the last {{time_range}} and {{breakdown_note}}. You can modify the time range or add additional breakdowns in the query builder."
+
+EXAMPLE (conversational style):
+"Great question! I've put together an {{feature_mode}} report that shows {{details}}. A few things stand out: {{insight}}. Want me to break this down further by any specific dimension?"
+
+Generate:
+1. **responses_style_a** (4 templates) — Precise, structured, technical style
+2. **responses_style_b** (4 templates) — Conversational, insight-driven, friendly style
+3. **insight_snippets** (7 strings) — Short observations like "there's a 15% increase compared to the previous period"
+4. **detail_snippets** (4 strings) — Use {{entity}}, {{aggregation}}, {{breakdown}}, {{time_range}} placeholders
+5. **problematic_responses** (8 strings) — Intentionally incorrect/problematic AI outputs for HITL demo
+6. **sample_outputs** — One dict per feature mode with a template output structure
+
+Return JSON:
+{{
+  "responses_style_a": ["template1", "template2", "template3", "template4"],
+  "responses_style_b": ["template1", "template2", "template3", "template4"],
+  "insight_snippets": ["insight1", ...],
+  "detail_snippets": ["detail1", ...],
+  "problematic_responses": ["bad1", "bad2", ...],
+  "sample_outputs": {{
+    "mode1": {{"output_type": "...", "key": "value"}},
+    "mode2": {{"output_type": "...", "key": "value"}}
+  }}
+}}
+
+Adapt the language to {ai_product_name}'s domain. Return ONLY valid JSON.
