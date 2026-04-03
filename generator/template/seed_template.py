@@ -1190,6 +1190,7 @@ def _run_experiment_row(experiment, row, prompt_ver, model_name, accuracy_base, 
             scores[scorer_slugs[0]] = round(max(0.0, min(1.0, ab + complexity_penalty + random.uniform(-0.08, 0.08))), 3)
             scores[scorer_slugs[1]] = round(max(0.0, min(1.0, 0.90 + complexity_penalty * 0.5 + random.uniform(-0.06, 0.06))), 3)
             scores[scorer_slugs[2]] = round(max(0.0, min(1.0, qb + complexity_penalty * 0.5 + random.uniform(-0.08, 0.08))), 3)
+        scores["thread_coherence"] = round(max(0.0, min(1.0, random.uniform(0.80, 1.0) + complexity_penalty * 0.3)), 3)
 
         span.log(
             input=user_msg,

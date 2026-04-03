@@ -1973,10 +1973,12 @@ def _run_experiment_row(experiment, row, prompt_ver, model_name, correctness_bas
         if report_type == "ambiguous":
             cb -= 0.10
 
+        thread_coherence = round(max(0.0, min(1.0, random.uniform(0.80, 1.0) + complexity_penalty * 0.3)), 3)
         scores = {
             "query_correctness": round(max(0.0, min(1.0, cb + complexity_penalty + random.uniform(-0.08, 0.08))), 3),
             "schema_adherence": round(max(0.0, min(1.0, 0.90 + complexity_penalty * 0.5 + random.uniform(-0.06, 0.06))), 3),
             "response_quality": round(max(0.0, min(1.0, qb + complexity_penalty * 0.5 + random.uniform(-0.08, 0.08))), 3),
+            "thread_coherence": thread_coherence,
         }
 
         span.log(
