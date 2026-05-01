@@ -9,17 +9,17 @@ All properties: {properties_summary}
 
 Generate 4 schema contexts — one per customer vertical. Each represents a different type of customer using {ai_product_name}, with a relevant subset of entities and properties.
 
-EXAMPLE (from Mixpanel Spark AI):
+EXAMPLE shape (de-branded — replace every entity and property with names from {ai_product_name}'s actual domain):
 [
   {{
-    "vertical": "b2b_saas",
-    "entities": ["Sign Up", "Login", "Feature Used", "Plan Upgraded", "Subscription Started", "Subscription Cancelled", "Invite Sent", "Report Generated"],
-    "properties": ["plan_type", "platform", "country", "feature_name", "referral_source"]
+    "vertical": "<one customer segment>",
+    "entities": ["<entity 1>", "<entity 2>", "<entity 3>", "<entity 4>", "<entity 5>", "<entity 6>"],
+    "properties": ["<property 1>", "<property 2>", "<property 3>", "<property 4>"]
   }},
   {{
-    "vertical": "ecommerce",
-    "entities": ["Sign Up", "Page Viewed", "Search Performed", "Item Purchased", "Checkout Started", "Checkout Completed", "Cart Abandoned"],
-    "properties": ["platform", "country", "referral_source", "amount_usd", "browser"]
+    "vertical": "<another customer segment>",
+    "entities": ["<entity 1>", "<entity 2>", "<entity 3>", "<entity 4>", "<entity 5>"],
+    "properties": ["<property 1>", "<property 2>", "<property 3>", "<property 4>"]
   }}
 ]
 

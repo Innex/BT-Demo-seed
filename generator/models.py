@@ -42,15 +42,15 @@ class ResearchReport:
 class CustomerData:
     """Output of Phase 2: all 13 domain-specific data structures for the seed script."""
 
-    # 1. AI feature modes (equivalent of Mixpanel's report types)
+    # 1. AI feature modes — distinct categories of tasks/outputs the AI handles
     ai_feature_modes: list[str] = field(default_factory=list)
     ai_feature_mode_weights: list[float] = field(default_factory=list)
 
-    # 2. Domain entities (equivalent of Mixpanel's events)
+    # 2. Domain entities — the objects/events the AI operates on
     domain_entities: list[dict] = field(default_factory=list)
     # Each: {"name": "...", "category": "..."}
 
-    # 3. Entity properties (equivalent of Mixpanel's event properties)
+    # 3. Entity properties — attributes of domain entities
     entity_properties: list[dict] = field(default_factory=list)
     # Each: {"name": "...", "type": "string"|"number", "values": [...] or None}
 

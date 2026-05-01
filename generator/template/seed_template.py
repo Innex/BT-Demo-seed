@@ -94,6 +94,22 @@ class TraceConfig:
     schema_context: dict
 
 
+def _queries_for(feature_mode: str) -> list[str]:
+    """Pick the user-query bucket for a feature mode, with a sane fallback.
+
+    USER_QUERIES is keyed by mode but the LLM occasionally produces a mode
+    with no example queries. Fall back to any non-empty bucket so trace
+    generation never crashes mid-run.
+    """
+    bucket = USER_QUERIES.get(feature_mode) or []
+    if bucket:
+        return bucket
+    for q in USER_QUERIES.values():
+        if q:
+            return q
+    return [f"Tell me about {feature_mode}"]
+
+
 def generate_trace_config(idx: int) -> TraceConfig:
     feature_mode = random.choices(FEATURE_MODES, weights=FEATURE_MODE_WEIGHTS, k=1)[0]
     schema = random.choice(SCHEMA_CONTEXTS)
@@ -122,7 +138,7 @@ def generate_trace_config(idx: int) -> TraceConfig:
         prompt_version=random.choice(PROMPT_VERSIONS),
         model=random.choice(MODELS),
         quality_tier=quality_tier,
-        user_query=random.choice(USER_QUERIES[feature_mode]),
+        user_query=random.choice(_queries_for(feature_mode)),
         schema_context=schema,
     )
 
@@ -334,7 +350,7 @@ def _api_upsert_function(api_url: str, api_key: str, project_id: str, payload: d
     if resp.status_code == 409:
         list_resp = requests.get(
             f"{api_url}/v1/function",
-            params={"project_id": project_id, "slug": payload.get("slug", ""), "function_type": payload.get("function_type", "")},
+            params={"project_id": project_id, "slug": payload.get("slug", "")},
             headers=headers,
         )
         if list_resp.ok and list_resp.json().get("objects"):
@@ -629,7 +645,7 @@ async function handler({ trace, output, metadata }) {
             print(f"  Created scorer: {s['slug']} ({ft})")
             list_resp = requests.get(
                 f"{api_url}/v1/function",
-                params={"project_id": project_id, "slug": s["slug"], "function_type": "scorer"},
+                params={"project_id": project_id, "slug": s["slug"]},
                 headers=headers,
             )
             if list_resp.ok and list_resp.json().get("objects"):
@@ -676,13 +692,16 @@ async function handler({ trace, output, metadata }) {
                 "online": {
                     "sampling_rate": 1.0,
                     "scorers": [{"type": "function", "id": sid} for sid in trace_scorer_ids],
-                    "scope": {"type": "trace", "idle_seconds": 10},
+                    # 60s idle is enough for any single-trace multi-turn conversation
+                    # to fully settle. The scorer fires once at the end instead of
+                    # re-firing after each chat turn (which 10s would do on multi-turn).
+                    "scope": {"type": "trace", "idle_seconds": 60},
                 },
             },
         }
         resp = requests.post(f"{api_url}/v1/project_score", json=trace_rule_payload, headers=headers)
         if resp.ok:
-            print(f"  Created online scoring rule: {AI_PRODUCT_NAME} thread coherence (trace-level, idle_seconds=10)")
+            print(f"  Created online scoring rule: {AI_PRODUCT_NAME} thread coherence (trace-level, idle_seconds=60)")
         elif resp.status_code == 409:
             print("  Online scoring rule already exists (skipping)")
         else:
@@ -712,6 +731,11 @@ def create_facets(project_name: str):
             "function_type": "facet",
             "function_data": {
                 "type": "facet",
+                # `preprocessor` is required by the modern facet schema. Without
+                # it the UI marks the facet as "legacy" and topic generation
+                # silently skips it. The "thread" global preprocessor turns the
+                # full conversation into a single string the facet can classify.
+                "preprocessor": {"type": "global", "name": "thread", "function_type": "preprocessor"},
                 "prompt": f["prompt"],
                 "model": "gpt-5-nano",
                 **({"no_match_pattern": f["no_match_pattern"]} if "no_match_pattern" in f else {}),
@@ -722,7 +746,8 @@ def create_facets(project_name: str):
         if _api_upsert_function(api_url, api_key, project_id, facet):
             print(f"  Created facet: {facet['name']} ({facet['slug']})")
 
-    facet_ids = []
+    # Re-fetch each facet by slug to get its server-assigned id + name
+    project_facets = []
     for facet in facet_payloads:
         list_resp = requests.get(
             f"{api_url}/v1/function",
@@ -730,7 +755,38 @@ def create_facets(project_name: str):
             headers=headers,
         )
         if list_resp.ok and list_resp.json().get("objects"):
-            facet_ids.append(list_resp.json()["objects"][0]["id"])
+            project_facets.append(list_resp.json()["objects"][0])
+
+    # For each facet, create a corresponding `topic_map` function. The UI flags
+    # any facet that lacks a matching topic_map as a "legacy facet that is not
+    # correctly configured" and silently drops it from topic generation.
+    # (This is what the UI's "Fix" button does internally — see
+    # app/ui/trace/use-fix-legacy-facet.ts in braintrust-core.)
+    topic_map_ids = []
+    for f in project_facets:
+        source_facet = f["slug"]
+        tm_payload = {
+            "name": f["name"],
+            "slug": f"{source_facet}-topic-map",
+            "description": f.get("description") or f"Topic map for {f['name']}",
+            "function_type": "classifier",
+            "function_data": {
+                "type": "topic_map",
+                "source_facet": source_facet,
+                "embedding_model": "brain-embedding-1",
+            },
+        }
+        if _api_upsert_function(api_url, api_key, project_id, tm_payload):
+            list_resp = requests.get(
+                f"{api_url}/v1/function",
+                params={"project_id": project_id, "slug": tm_payload["slug"]},
+                headers=headers,
+            )
+            if list_resp.ok and list_resp.json().get("objects"):
+                topic_map_ids.append(list_resp.json()["objects"][0]["id"])
+                print(f"  Created topic map for facet: {f['slug']}")
+
+    facet_ids = [f["id"] for f in project_facets]
 
     print("\n--- Creating topic automation ---")
     facet_refs = [
@@ -739,17 +795,36 @@ def create_facets(project_name: str):
         {"type": "global", "name": "Issues", "function_type": "facet"},
     ] + [{"type": "function", "id": fid} for fid in facet_ids]
 
-    # Use the last custom facet for the topic map
+    # `topic_map_functions` must contain ONLY function refs that resolve to
+    # topic_map functions (function_data.type == "topic_map"). Mixing in raw
+    # facet refs (or globals) here trips the error: "Topic map [X] is missing
+    # a source_facet in its signature".
+    #
+    # For the 3 global facets (Sentiment/Task/Issues) referenced above in
+    # facet_functions, the system needs paired topic_map functions in this
+    # array too. They're already generated at project scope by the platform
+    # when the global facets are first used — fetch them by source_facet name.
+    global_topic_map_ids = []
+    for global_name in ("Sentiment", "Task", "Issues"):
+        list_resp = requests.get(
+            f"{api_url}/v1/function",
+            params={"project_id": project_id, "limit": 200},
+            headers=headers,
+        )
+        if list_resp.ok:
+            for fn in list_resp.json().get("objects") or []:
+                fd = fn.get("function_data") or {}
+                if fd.get("type") == "topic_map" and fd.get("source_facet") == global_name:
+                    global_topic_map_ids.append(fn["id"])
+                    break
+
     topic_map_functions = [
-        {"function": {"type": "global", "name": "Sentiment", "function_type": "facet"}},
-        {"function": {"type": "global", "name": "Task", "function_type": "facet"}},
-        {"function": {"type": "global", "name": "Issues", "function_type": "facet"}},
+        {"function": {"type": "function", "id": tid}}
+        for tid in topic_map_ids + global_topic_map_ids
     ]
-    if facet_ids:
-        topic_map_functions.append({"function": {"type": "function", "id": facet_ids[-1]}})
 
     automation_payload = {
-        "project_automation_name": f"{AI_PRODUCT_NAME} topics",
+        "name": f"{AI_PRODUCT_NAME} topics",
         "description": f"Auto-clusters {AI_PRODUCT_NAME} traces by topic",
         "project_id": project_id,
         "config": {
@@ -761,7 +836,7 @@ def create_facets(project_name: str):
         },
     }
     resp = requests.post(
-        f"{api_url}/api/project_automation/register",
+        f"{api_url}/v1/project_automation",
         json=automation_payload,
         headers=headers,
     )
@@ -914,7 +989,7 @@ def log_trace(logger, config: TraceConfig, trace_idx: int, oai_client):
     system_prompt = build_system_prompt(config)
     schema = config.schema_context
 
-    has_history = random.random() < 0.35
+    has_history = bool(PRIOR_CONVERSATION_SNIPPETS) and random.random() < 0.35
     prior_turns = random.choice(PRIOR_CONVERSATION_SNIPPETS) if has_history else []
 
     schema_context_str = (
@@ -939,7 +1014,8 @@ def log_trace(logger, config: TraceConfig, trace_idx: int, oai_client):
                 metrics={"latency": perf["context_latency_s"]},
             )
 
-        # Step 2: LLM call via wrap_openai
+        # Step 2: LLM call via wrap_openai. Intentionally chat.completions —
+        # this trace mirrors the API shape most customer products use today.
         response = oai_client.chat.completions.create(
             model=_get_api_model(config.model),
             messages=messages,
@@ -1057,18 +1133,37 @@ def log_multi_turn_trace(logger, conversation: dict, trace_idx: int, oai_client)
         actual_turns = []
         user_turns = [t for t in template_turns if t["role"] == "user"]
 
-        for user_turn in user_turns:
+        # Wrap each turn in its own labeled span ("Chat turn N") so the trace
+        # tree visibly shows turn structure. Without this, all N LLM calls show
+        # as anonymous siblings under the root span and you can't tell which
+        # response goes with which user message.
+        for n, user_turn in enumerate(user_turns, start=1):
             accumulated_messages.append(user_turn)
             actual_turns.append(user_turn)
 
-            response = oai_client.chat.completions.create(
-                model=_get_api_model(config.model),
-                messages=accumulated_messages,
-            )
-            assistant_content = response.choices[0].message.content
-            assistant_turn = {"role": "assistant", "content": assistant_content}
-            accumulated_messages.append(assistant_turn)
-            actual_turns.append(assistant_turn)
+            with root_span.start_span(
+                name=f"Chat turn {n}",
+                span_attributes={"type": "task"},
+            ) as turn_span:
+                # Intentionally chat.completions — see note in log_trace.
+                response = oai_client.chat.completions.create(
+                    model=_get_api_model(config.model),
+                    messages=accumulated_messages,
+                )
+                assistant_content = response.choices[0].message.content
+                assistant_turn = {"role": "assistant", "content": assistant_content}
+                accumulated_messages.append(assistant_turn)
+                actual_turns.append(assistant_turn)
+
+                turn_span.log(
+                    input=user_turn["content"],
+                    output=assistant_content,
+                    metadata={
+                        "turn_number": n,
+                        "total_turns": len(user_turns),
+                        "model": config.model,
+                    },
+                )
 
         with root_span.start_span(
             name="{{VALIDATION_SPAN_NAME}}",
@@ -1164,6 +1259,7 @@ def _run_experiment_row(experiment, row, prompt_ver, model_name, accuracy_base, 
                 metadata={"vertical": vertical},
             )
 
+        # Intentionally chat.completions — see note in log_trace.
         response = oai_client.chat.completions.create(
             model=_get_api_model(model_name), messages=messages,
         )

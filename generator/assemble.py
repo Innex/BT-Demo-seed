@@ -62,10 +62,12 @@ def assemble(data: CustomerData, output_path: Path) -> Path:
     filename = f"seed_{slug}.py"
 
     docstring = (
-        f"{data.company_name} {data.ai_product_name} Demo - Seeds a Braintrust project with:\\n"
-        f"  - 2 versioned prompts ({data.style_a_name} vs {data.style_b_name})\\n"
-        f"  - {len(data.scorers)} scorers\\n"
-        f"  - 1 golden dataset (~{len(data.golden_dataset_rows)} curated test cases)\\n"
+        f"{data.project_name} Demo - Seeds a Braintrust project with:\n"
+        f"  - 2 versioned prompts ({data.style_a_name} vs {data.style_b_name})\n"
+        f"  - {len(data.scorers)} LLM scorers + 2 code scorers (grounding, thread coherence)\n"
+        f"  - {len(data.facets)} custom facets and 1 topic automation\n"
+        f"  - 1 golden dataset (~{len(data.golden_dataset_rows)} curated test cases)\n"
+        f"  - 4 experiments (prompt A/B + 2 model comparisons)\n"
         f"  - 500 realistic {data.ai_product_name} traces"
     )
 
@@ -114,11 +116,15 @@ def assemble(data: CustomerData, output_path: Path) -> Path:
         placeholder = "{{" + key + "}}"
         result = result.replace(placeholder, str(value))
 
-    # Check for any remaining placeholders
+    # Check for any remaining placeholders. {{...}} that the substitution map
+    # missed indicates a generator bug; ship-stopping rather than warn-and-pray.
     remaining = re.findall(r"\{\{[A-Z_]+\}\}", result)
     if remaining:
-        unique = set(remaining)
-        print(f"  Warning: {len(unique)} unresolved placeholders: {unique}")
+        unique = sorted(set(remaining))
+        raise RuntimeError(
+            f"Assembly produced unresolved placeholders: {unique}. "
+            f"Add these keys to the replacements map in generator/assemble.py."
+        )
 
     # Write output
     output_file = output_path / filename

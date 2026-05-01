@@ -9,13 +9,13 @@ Failure modes: {failure_modes}
 
 Generate 4 facet definitions. Facets are LLM classifiers that extract structured labels from traces for topic clustering.
 
-EXAMPLE (from Mixpanel Spark AI):
+EXAMPLE shape (de-branded — adapt every label and prompt to {ai_product_name}'s actual domain):
 [
   {{
-    "name": "Report type requested",
-    "slug": "report-type-requested",
-    "description": "Classifies which report type the user's query maps to",
-    "prompt": "What type of report is the user asking for?\n\nRespond with a single label:\n- Insights — trends, counts, aggregations\n- Funnels — conversion paths\n- Retention — user retention tracking\n- Flows — user journey visualization\n- Ambiguous — could map to multiple types\n\nIf not about analytics, respond: \"NONE\"",
+    "name": "Capability requested",
+    "slug": "capability-requested",
+    "description": "Classifies which product capability the user's query maps to",
+    "prompt": "Which capability is the user asking for?\n\nRespond with a single label drawn from the product's feature modes.\n- Capability A — short description\n- Capability B — short description\n- Ambiguous — could map to multiple\n\nIf not about the product at all, respond: \"NONE\"",
     "no_match_pattern": "^NONE"
   }},
   {{

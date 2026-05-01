@@ -11,17 +11,17 @@ Domain entities: {entities_summary}
 
 Generate realistic user queries (natural language inputs) that users would type into {ai_product_name}, organized by feature mode.
 
-EXAMPLE (from Mixpanel Spark AI):
+EXAMPLE shape (de-branded — keys must be the actual feature_modes above; values are realistic user requests for {ai_product_name}):
 {{
-  "insights": [
-    "Show me daily active users over the last 30 days",
-    "What's our signup conversion rate this month?",
-    "Break down page views by country for Q1",
-    "Compare feature usage between free and paid users"
+  "<feature_mode_1>": [
+    "<a simple request a real user would type>",
+    "<a moderate request mixing multiple entities/properties>",
+    "<a complex multi-step request>",
+    "<an ambiguous request that needs clarification>"
   ],
-  "funnels": [
-    "Show me the conversion funnel from Sign Up to first Feature Used",
-    "What's the drop-off rate between Checkout Started and Checkout Completed?"
+  "<feature_mode_2>": [
+    "<simple request>",
+    "<request that filters or breaks down by a property>"
   ]
 }}
 

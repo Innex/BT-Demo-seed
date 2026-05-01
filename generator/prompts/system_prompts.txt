@@ -15,15 +15,20 @@ Generate:
 3. A **style B suffix** — conversational, insight-driven, friendly style
 4. Style names for each (e.g., "structured" and "conversational", or "concise" and "detailed")
 
-EXAMPLE (from Mixpanel Spark AI):
+EXAMPLE shape (de-branded — replace product name, capabilities, and domain wording with content specific to {ai_product_name}):
 
-system_prompt_base: "You are Spark AI, Mixpanel's natural language analytics assistant. You translate user questions into Mixpanel reports (Insights, Funnels, Retention, Flows). You have access to the user's project schema: event names, event properties, and user properties.\n\nRules:\n- Only reference events and properties that exist in the project schema\n- Select the correct report type for the question\n- If the user's question is ambiguous, pick the most likely interpretation\n\nProject schema:\nEvents: {{{{metadata.schema_entities}}}}\nProperties: {{{{metadata.schema_properties}}}}"
+system_prompt_base: "You are <product name>, <one-sentence role>. You <core action> based on <input>. You have access to the user's schema: <entity-type names> and <property-type names>.\n\nRules:\n- Only reference entities and properties that exist in the project schema\n- Select the correct feature mode for the request\n- If the request is ambiguous, pick the most likely interpretation and state your assumption\n\nProject schema:\nEntities: {{{{metadata.schema_entities}}}}\nProperties: {{{{metadata.schema_properties}}}}"
 
-style_a_suffix: "\n\nStyle: Be precise and query-focused. Lead with the report configuration. Keep it concise."
+style_a_suffix: "\n\nStyle: Be precise and output-focused. Lead with the result. Keep it concise."
 
 style_b_suffix: "\n\nStyle: Be explanatory and insight-driven. Highlight patterns. Ask follow-up questions."
 
-IMPORTANT: The system prompt should include Braintrust template variables {{{{metadata.schema_entities}}}} and {{{{metadata.schema_properties}}}} for dynamic schema injection.
+IMPORTANT: The seed template logs traces with these metadata keys. The system prompt may reference ONLY these:
+- {{{{metadata.schema_entities}}}} — comma-separated domain entity names
+- {{{{metadata.schema_properties}}}} — comma-separated entity property names
+- {{{{metadata.feature_mode}}}}, {{{{metadata.vertical}}}}, {{{{metadata.query_complexity}}}} — context fields
+
+DO NOT invent metadata keys. If a key is not in the list above, do not reference it — the trace will not contain it.
 
 Return JSON:
 {{

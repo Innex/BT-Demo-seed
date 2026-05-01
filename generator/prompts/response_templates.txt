@@ -10,11 +10,11 @@ Generate two sets of AI response templates (4 each) plus insight and detail snip
 
 The templates use Python string format placeholders: {{feature_mode}}, {{details}}, {{time_range}}, {{breakdown_note}}, {{aggregation}}, {{breakdown}}, {{insight}}.
 
-EXAMPLE (from Mixpanel Spark AI — structured style):
-"I've created an {{feature_mode}} report for you. {{details}} The query covers the last {{time_range}} and {{breakdown_note}}. You can modify the time range or add additional breakdowns in the query builder."
+EXAMPLE shape (de-branded — structured style):
+"I've completed the {{feature_mode}} for you. {{details}} The result covers the last {{time_range}} and {{breakdown_note}}. You can adjust parameters or add additional filters."
 
-EXAMPLE (conversational style):
-"Great question! I've put together an {{feature_mode}} report that shows {{details}}. A few things stand out: {{insight}}. Want me to break this down further by any specific dimension?"
+EXAMPLE shape (conversational style):
+"Great question! Here's the {{feature_mode}} result: {{details}}. A few things stand out: {{insight}}. Want me to refine this further along any dimension?"
 
 Generate:
 1. **responses_style_a** (4 templates) — Precise, structured, technical style

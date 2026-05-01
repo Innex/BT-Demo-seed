@@ -30,12 +30,11 @@ def generate_requirements_doc(report: ResearchReport, output_path: Path) -> Path
     )
 
     client = openai.OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-    resp = client.chat.completions.create(
-        model="gpt-4.1-mini",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.4,
+    resp = client.responses.create(
+        model="gpt-5-mini",
+        input=[{"role": "user", "content": prompt}],
     )
-    content = resp.choices[0].message.content
+    content = resp.output_text
 
     # Strip any code fences the LLM might have added
     if content.startswith("```"):

@@ -13,7 +13,7 @@ Generate two data structures:
 
 2. **ENTITY_PROPERTIES** — Attributes of those entities with possible enum values.
 
-FORMAT EXAMPLE (from a Mixpanel analytics demo):
+FORMAT EXAMPLE (de-branded — replace every name with one specific to {ai_product_name}'s domain):
 
 ENTITIES = [
     {{"name": "Sign Up", "category": "acquisition"}},

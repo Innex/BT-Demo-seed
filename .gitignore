@@ -2,3 +2,8 @@
 __pycache__/
 *.pyc
 .DS_Store
+
+# Generator outputs are customer-specific; keep the directory but ignore contents
+generated/*
+!generated/.gitkeep
+!generated/README.md

@@ -8,38 +8,29 @@ from .models import ResearchReport
 
 PROMPTS_DIR = Path(__file__).parent / "prompts"
 
+DEFAULT_MODEL = "gpt-5-mini"
 
-def _call_llm(prompt: str, model: str = "gpt-4.1-mini") -> str:
+
+def _client():
     import openai
+    return openai.OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
-    client = openai.OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-    resp = client.chat.completions.create(
+
+def _call_llm(prompt: str, model: str = DEFAULT_MODEL) -> str:
+    resp = _client().responses.create(
         model=model,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.3,
+        input=[{"role": "user", "content": prompt}],
     )
-    return resp.choices[0].message.content
+    return resp.output_text
 
 
 def _web_search(query: str) -> str:
-    import openai
-
-    client = openai.OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-    resp = client.responses.create(
-        model="gpt-4.1-mini",
+    resp = _client().responses.create(
+        model=DEFAULT_MODEL,
         tools=[{"type": "web_search_preview"}],
         input=query,
     )
-    # Extract text from response output items
-    texts = []
-    for item in resp.output:
-        if hasattr(item, "text"):
-            texts.append(item.text)
-        elif hasattr(item, "content"):
-            for block in item.content:
-                if hasattr(block, "text"):
-                    texts.append(block.text)
-    return "\n".join(texts) if texts else str(resp.output)
+    return resp.output_text or str(resp.output)
 
 
 def research_customer(name: str, url: str, context: str = "", verbose: bool = False) -> ResearchReport:
@@ -81,7 +72,7 @@ def research_customer(name: str, url: str, context: str = "", verbose: bool = Fa
         research_notes=raw_notes,
     )
 
-    synthesis_result = _call_llm(synthesis_prompt, model="gpt-4.1-mini")
+    synthesis_result = _call_llm(synthesis_prompt)
 
     # Parse JSON from response (handle markdown code fences)
     json_str = synthesis_result.strip()

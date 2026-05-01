@@ -11,7 +11,7 @@ Failure modes: {failure_modes}
 Use cases: {use_cases}
 Pipeline steps: {pipeline_steps}
 
-Write a markdown document following this exact structure (adapted from a Mixpanel Spark AI example):
+Write a markdown document following this exact structure:
 
 1. **What is [AI Product]?** — 2 paragraph explanation of what the AI does and why correctness matters
 2. **Security & Compliance** — Table mapping SOC 2, zero-retention, encryption, RBAC, self-hosted, data residency to Braintrust capabilities (use same Braintrust links as example)

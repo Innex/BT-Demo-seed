@@ -12,24 +12,24 @@ Generate two data structures:
 
 2. **PRIOR_CONVERSATION_SNIPPETS** — 5 shorter conversation fragments (1-2 turns each) that can be prepended to single-turn traces to simulate mid-session context.
 
-EXAMPLE multi_turn_conversation (from Mixpanel Spark AI):
+EXAMPLE shape (de-branded — replace EVERY string with content specific to {ai_product_name}):
 {{
-  "feature_mode": "insights",
-  "vertical": "b2b_saas",
+  "feature_mode": "<one of the feature modes above>",
+  "vertical": "<one of {ai_product_name}'s customer verticals>",
   "turns": [
-    {{"role": "user", "content": "Show me daily active users over the last 30 days"}},
-    {{"role": "assistant", "content": "I've created an Insights report showing unique users with Session Started events over the last 30 days. You're averaging about 12,400 DAU."}},
-    {{"role": "user", "content": "Can you break that down by platform?"}},
-    {{"role": "assistant", "content": "Done! The breakdown shows: Web 65%, iOS 22%, Android 13%."}},
-    {{"role": "user", "content": "Interesting. What about just enterprise users?"}},
-    {{"role": "assistant", "content": "Enterprise users make up 18% of DAU (about 2,200 users). Their platform split is different: Web 82%, iOS 12%, Android 6%."}}
+    {{"role": "user", "content": "<initial domain-specific request>"}},
+    {{"role": "assistant", "content": "<assistant response with concrete numbers/details>"}},
+    {{"role": "user", "content": "<follow-up that refines, narrows, or pivots>"}},
+    {{"role": "assistant", "content": "<assistant response that keeps prior context>"}},
+    {{"role": "user", "content": "<third refinement>"}},
+    {{"role": "assistant", "content": "<final assistant response>"}}
   ]
 }}
 
-EXAMPLE prior_conversation_snippet:
+EXAMPLE prior_conversation_snippet shape (1-2 user/assistant pairs from a realistic earlier session):
 [
-  {{"role": "user", "content": "Show me daily active users over the last 30 days"}},
-  {{"role": "assistant", "content": "I've created an Insights report showing unique users over the last 30 days. You're averaging about 12,400 DAU with a slight upward trend."}}
+  {{"role": "user", "content": "<earlier domain-specific request>"}},
+  {{"role": "assistant", "content": "<earlier assistant response with concrete details>"}}
 ]
 
 Return JSON:

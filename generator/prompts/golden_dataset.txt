@@ -11,18 +11,18 @@ Schema contexts: {schema_contexts_summary}
 
 Generate 30-40 golden dataset rows — curated test cases for regression testing. Each row tests whether {ai_product_name} handles a specific type of query correctly.
 
-EXAMPLE ROW (from Mixpanel Spark AI):
+EXAMPLE ROW shape (de-branded — "expected" should be JSON whose keys match {ai_product_name}'s actual output schema, not the example below):
 {{
-  "input": "Show me daily active users over the last 30 days",
-  "expected": "{{\"report_type\": \"insights\", \"events\": [{{\"event\": \"Session Started\", \"aggregation\": \"unique_users\"}}], \"time_range\": \"30d\"}}",
+  "input": "<a realistic user request specific to {ai_product_name}>",
+  "expected": "<JSON string of the structured output the AI should produce — keys must match the product's actual output schema>",
   "metadata": {{
-    "feature_mode": "insights",
+    "feature_mode": "<one of the feature modes>",
     "query_complexity": "simple",
-    "vertical": "b2b_saas",
-    "schema_entities": "Sign Up, Login, Feature Used, Session Started",
-    "schema_properties": "plan_type, platform, country"
+    "vertical": "<one of the customer verticals>",
+    "schema_entities": "<comma-separated entity names available in this row's schema context>",
+    "schema_properties": "<comma-separated property names available in this row's schema context>"
   }},
-  "tags": ["insights", "simple", "dau"]
+  "tags": ["<feature_mode>", "simple", "<topic>"]
 }}
 
 COVERAGE REQUIREMENTS:
@@ -34,24 +34,24 @@ COVERAGE REQUIREMENTS:
 - Include "schema_entities" and "schema_properties" in every row's metadata
 - Tags should include feature_mode, complexity, and topic
 
-Multi-turn row example:
+Multi-turn row shape (de-branded — adapt content):
 {{
-  "input": "Can you also break that down by platform?",
-  "expected": "{{\"action\": \"Add breakdown by platform to existing report\"}}",
+  "input": "<follow-up request that depends on prior context>",
+  "expected": "<JSON string describing the modification the AI should make to its prior output>",
   "metadata": {{
-    "feature_mode": "insights",
+    "feature_mode": "<one of the feature modes>",
     "query_complexity": "simple",
-    "vertical": "b2b_saas",
-    "schema_entities": "Sign Up, Login",
-    "schema_properties": "plan_type, platform",
+    "vertical": "<one of the customer verticals>",
+    "schema_entities": "<comma-separated entity names>",
+    "schema_properties": "<comma-separated property names>",
     "is_multi_turn": true,
     "turn_count": 3,
     "conversation_history": [
-      {{"role": "user", "content": "Show me daily active users"}},
-      {{"role": "assistant", "content": "I've created a report showing DAU..."}}
+      {{"role": "user", "content": "<earlier request>"}},
+      {{"role": "assistant", "content": "<earlier assistant response>"}}
     ]
   }},
-  "tags": ["multi_turn", "insights", "follow_up"]
+  "tags": ["multi_turn", "<feature_mode>", "follow_up"]
 }}
 
 Return JSON:

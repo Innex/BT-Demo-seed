@@ -9,13 +9,28 @@ Failure modes: {failure_modes}
 
 Generate 3 scorer definitions. Scorers are LLM-as-a-judge prompts that evaluate AI output quality.
 
-EXAMPLE (from Mixpanel Spark AI):
+CRITICAL: The seed template logs traces with EXACTLY these metadata keys. Your scorer prompts must reference ONLY these:
+- {{{{input}}}} — the user's input
+- {{{{output}}}} — the AI's response
+- {{{{metadata.feature_mode}}}} — which AI capability mode the request hit
+- {{{{metadata.query_complexity}}}} — "simple" | "moderate" | "complex" | "multi_turn"
+- {{{{metadata.vertical}}}} — customer industry vertical
+- {{{{metadata.prompt_version}}}} — prompt version label
+- {{{{metadata.model}}}} — model name
+- {{{{metadata.schema_entities}}}} — comma-separated entity names from the customer schema
+- {{{{metadata.schema_properties}}}} — comma-separated property names from the customer schema
+- {{{{metadata.generated_output}}}} — the structured output the AI produced
+- {{{{metadata.validation_result}}}} — "passed" | "failed"
+
+DO NOT invent metadata keys. If a key is not in the list above, do not reference it — the trace will not contain it and the scorer will silently get an empty string.
+
+EXAMPLE shape (de-branded — adapt the wording to {ai_product_name}'s actual domain):
 [
   {{
-    "name": "Query correctness",
-    "slug": "query-correctness",
-    "description": "Evaluates whether the AI generated the correct query for the user's question.",
-    "prompt": "You are an expert evaluating whether an AI correctly translated a natural language question into a query.\n\nUser's question: {{{{input}}}}\nAI response: {{{{output}}}}\n\nEvaluate:\n1. Did it select the correct report type?\n2. Were the correct entities selected?\n3. Is the aggregation appropriate?",
+    "name": "Output correctness",
+    "slug": "output-correctness",
+    "description": "Evaluates whether the AI's structured output correctly answers the user's question.",
+    "prompt": "You are an expert evaluating an AI assistant's output.\n\nUser input: {{{{input}}}}\nAI response: {{{{output}}}}\nFeature mode: {{{{metadata.feature_mode}}}}\nGenerated output: {{{{metadata.generated_output}}}}\nAvailable entities: {{{{metadata.schema_entities}}}}\nAvailable properties: {{{{metadata.schema_properties}}}}\n\nEvaluate:\n1. Did the AI pick the right feature mode?\n2. Did it use only entities/properties from the schema?\n3. Does the output actually answer the question?",
     "choice_scores": {{"Correct": 1.0, "Mostly correct": 0.75, "Partially correct": 0.5, "Incorrect": 0.25, "Completely wrong": 0.0}},
     "metadata": {{"category": "accuracy", "owner": "ai-team", "deployment_gate": true}}
   }}
@@ -25,11 +40,6 @@ The 3 scorers should map to the evaluation dimensions:
 1. **Accuracy/correctness** — Is the AI output factually/functionally correct?
 2. **Grounding/faithfulness** — Does the AI stay within provided context/schema?
 3. **Response quality** — Is the output helpful, clear, and actionable?
-
-IMPORTANT: Scorer prompts MUST use Braintrust template variables:
-- {{{{input}}}} — the user's input
-- {{{{output}}}} — the AI's response
-- {{{{metadata.X}}}} — any metadata field
 
 Return JSON:
 {{

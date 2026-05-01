@@ -12,7 +12,7 @@ RESEARCH NOTES:
 Return a JSON object with these fields:
 
 {{
-  "ai_product_name": "The name of their AI product/feature (e.g., 'Spark AI')",
+  "ai_product_name": "The name of their AI product/feature",
   "ai_product_description": "2-3 sentence description of what the AI does",
   "product_domain": "One of: analytics, customer-support, code-generation, content-creation, search, data-processing, sales, marketing, security, other",
   "input_type": "What users provide to the AI (e.g., 'natural language analytics questions')",

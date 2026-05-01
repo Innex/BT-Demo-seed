@@ -7,9 +7,9 @@ Domain: {product_domain}
 
 Generate the AI product's "feature modes" — the distinct categories of tasks/outputs the AI handles.
 
-EXAMPLE (from Mixpanel Spark AI — an analytics product):
+EXAMPLE (for an analytics assistant):
 Feature modes: ["insights", "funnels", "retention", "flows"]
-These are the 4 report types Spark AI can generate.
+These would be the report types the assistant can generate.
 
 EXAMPLE (for a customer support AI):
 Feature modes: ["ticket_resolution", "knowledge_search", "escalation_routing", "summary_generation"]

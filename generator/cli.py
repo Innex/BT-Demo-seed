@@ -25,6 +25,7 @@ def main():
     parser.add_argument("--verbose", action="store_true", help="Show intermediate output")
     parser.add_argument("--dry-run", action="store_true", help="Generate and validate but don't write files")
     parser.add_argument("--skip-requirements-doc", action="store_true", help="Skip requirements mapping doc generation")
+    parser.add_argument("--no-cache", action="store_true", help="Disable per-step LLM caching (default: cache to .cache/<customer>/)")
 
     args = parser.parse_args()
 
@@ -51,8 +52,12 @@ def main():
         research_path = output_path / f"research_{args.customer.lower().replace(' ', '_')}.json"
         save_research(report, research_path)
 
-    # Phase 2: Synthesize
-    data = synthesize_all(report, verbose=args.verbose)
+    # Phase 2: Synthesize (with per-step checkpointing so partial failures resume cheaply)
+    cache_dir = None
+    if not args.no_cache:
+        slug = args.customer.lower().replace(" ", "_").replace("-", "_")
+        cache_dir = output_path / ".cache" / slug
+    data = synthesize_all(report, verbose=args.verbose, cache_dir=cache_dir)
 
     if args.dry_run:
         print("\n  [DRY RUN] Skipping file generation")
@@ -86,3 +91,7 @@ def main():
     print(f"       export OPENAI_API_KEY='...'")
     print(f"    3. Run: python {script_path} --project \"{data.project_name}\" --count 500")
     print()
+
+    # Don't ship a broken script silently — propagate the validation result.
+    if not is_valid:
+        sys.exit(1)

@@ -1,24 +1,29 @@
 """Phase 2: Generate all 13 domain-specific data structures via LLM calls."""
 
+from __future__ import annotations
+
 import json
+import math
 import os
 from pathlib import Path
+from typing import Callable, Optional
 
 from .models import ResearchReport, CustomerData
 
 PROMPTS_DIR = Path(__file__).parent / "prompts"
 
+DEFAULT_MODEL = "gpt-5-mini"
 
-def _call_llm(prompt: str, model: str = "gpt-4.1-mini") -> str:
+
+def _call_llm(prompt: str, model: str = DEFAULT_MODEL) -> str:
     import openai
 
     client = openai.OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-    resp = client.chat.completions.create(
+    resp = client.responses.create(
         model=model,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.4,
+        input=[{"role": "user", "content": prompt}],
     )
-    return resp.choices[0].message.content
+    return resp.output_text
 
 
 def _parse_json(text: str, retry_prompt_context: str = "") -> dict:
@@ -44,6 +49,64 @@ def _parse_json(text: str, retry_prompt_context: str = "") -> dict:
 
 def _load_prompt(name: str) -> str:
     return (PROMPTS_DIR / name).read_text()
+
+
+def _normalize_weights(weights, n: int) -> list[float]:
+    """Coerce LLM-produced weights into a valid probability distribution.
+
+    The LLM occasionally returns weights that don't sum to 1.0, are the wrong
+    shape (dict instead of list), or contain non-numeric values. random.choices
+    only accepts a numeric list — fix everything here so trace generation
+    never crashes mid-run, and so volumes match the LLM's stated intent.
+    """
+    if n <= 0:
+        return []
+    uniform = [1.0 / n] * n
+    if not isinstance(weights, list) or len(weights) != n:
+        return uniform
+    try:
+        floats = [float(w) for w in weights]
+    except (TypeError, ValueError):
+        return uniform
+    total = sum(floats)
+    if total <= 0 or not math.isfinite(total):
+        return uniform
+    return [w / total for w in floats]
+
+
+def _compose_project_name(company: str, ai_product: str) -> str:
+    """Combine company + product without duplicating the company prefix.
+
+    The LLM sometimes returns ai_product_name with the company already in it
+    ("Salesforce Einstein and Agentforce"). Joining naively yields
+    "Salesforce Salesforce Einstein and Agentforce".
+    """
+    if not ai_product:
+        return company
+    if not company:
+        return ai_product
+    if ai_product.lower().startswith(company.lower()):
+        return ai_product
+    return f"{company} {ai_product}"
+
+
+def _checkpointed(cache_dir: Path | None, step: str, fn: Callable[[], dict]) -> dict:
+    """Run fn() once and cache its JSON result by step name.
+
+    On subsequent runs (after a partial failure), reuse the cached output and
+    skip the LLM call. Delete a single step file to force a re-run of just
+    that step.
+    """
+    if cache_dir is None:
+        return fn()
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_file = cache_dir / f"{step}.json"
+    if cache_file.exists():
+        print(f"    [cached] {step}")
+        return json.loads(cache_file.read_text())
+    result = fn()
+    cache_file.write_text(json.dumps(result, indent=2))
+    return result
 
 
 def _report_fields(report: ResearchReport) -> dict:
@@ -158,7 +221,7 @@ def generate_golden_dataset(
         properties_summary=json.dumps([p["name"] for p in properties]),
         schema_contexts_summary=json.dumps(schema_contexts[:2]),
     )
-    result = _call_llm(prompt, model="gpt-4.1-mini")
+    result = _call_llm(prompt)
     return _parse_json(result, retry_prompt_context="golden_dataset")
 
 
@@ -172,29 +235,42 @@ def generate_multi_turn(report: ResearchReport, feature_modes: list[str]) -> dic
     return _parse_json(result, retry_prompt_context="multi_turn")
 
 
-def synthesize_all(report: ResearchReport, verbose: bool = False) -> CustomerData:
-    """Run all 13 generation steps and return a complete CustomerData."""
+def synthesize_all(
+    report: ResearchReport,
+    verbose: bool = False,
+    cache_dir: Path | None = None,
+) -> CustomerData:
+    """Run all 10 generation steps and return a complete CustomerData.
+
+    If `cache_dir` is provided, each step's JSON output is cached to disk and
+    reused on subsequent runs. This makes a partial failure cheap to resume —
+    only the failing step (and steps after it) re-run.
+    """
 
     print(f"\n--- Synthesizing data for {report.ai_product_name} ---")
+    if cache_dir is not None:
+        print(f"  Cache: {cache_dir}")
     data = CustomerData()
     data.company_name = report.company_name
     data.ai_product_name = report.ai_product_name
-    data.project_name = f"{report.company_name} {report.ai_product_name}"
+    data.project_name = _compose_project_name(report.company_name, report.ai_product_name)
     data.product_domain = report.product_domain
 
     # Step 1: Feature modes + verticals
     print("  [1/10] Generating feature modes...")
-    fm = generate_feature_modes(report)
+    fm = _checkpointed(cache_dir, "01_feature_modes", lambda: generate_feature_modes(report))
     data.ai_feature_modes = fm["feature_modes"]
-    data.ai_feature_mode_weights = fm["feature_mode_weights"]
-    data.schema_contexts = []  # placeholder until step 7
+    data.ai_feature_mode_weights = _normalize_weights(
+        fm.get("feature_mode_weights", []), len(data.ai_feature_modes)
+    )
+    data.schema_contexts = []  # placeholder until step 8
     verticals = fm.get("customer_verticals", report.customer_verticals or ["general"])
     if verbose:
         print(f"    Modes: {data.ai_feature_modes}")
 
     # Step 2: Entities + properties
     print("  [2/10] Generating entities and properties...")
-    ent = generate_entities(report)
+    ent = _checkpointed(cache_dir, "02_entities", lambda: generate_entities(report))
     data.domain_entities = ent["entities"]
     data.entity_properties = ent["entity_properties"]
     if verbose:
@@ -202,7 +278,11 @@ def synthesize_all(report: ResearchReport, verbose: bool = False) -> CustomerDat
 
     # Step 3: User queries
     print("  [3/10] Generating user queries...")
-    uq = generate_user_queries(report, data.ai_feature_modes, data.domain_entities)
+    uq = _checkpointed(
+        cache_dir,
+        "03_user_queries",
+        lambda: generate_user_queries(report, data.ai_feature_modes, data.domain_entities),
+    )
     data.user_queries = uq.get("user_queries", uq)
     if verbose:
         total_queries = sum(len(v) for v in data.user_queries.values())
@@ -210,7 +290,7 @@ def synthesize_all(report: ResearchReport, verbose: bool = False) -> CustomerDat
 
     # Step 4: Response templates + snippets + sample outputs
     print("  [4/10] Generating response templates...")
-    rt = generate_response_templates(report)
+    rt = _checkpointed(cache_dir, "04_response_templates", lambda: generate_response_templates(report))
     data.responses_structured = rt.get("responses_style_a", [])
     data.responses_conversational = rt.get("responses_style_b", [])
     data.insight_snippets = rt.get("insight_snippets", [])
@@ -219,7 +299,11 @@ def synthesize_all(report: ResearchReport, verbose: bool = False) -> CustomerDat
 
     # Step 5: System prompts
     print("  [5/10] Generating system prompts...")
-    sp = generate_system_prompts(report, data.ai_feature_modes)
+    sp = _checkpointed(
+        cache_dir,
+        "05_system_prompts",
+        lambda: generate_system_prompts(report, data.ai_feature_modes),
+    )
     data.system_prompt_base = sp["system_prompt_base"]
     data.style_a_name = sp.get("style_a_name", "structured")
     data.style_a_suffix = sp["style_a_suffix"]
@@ -230,29 +314,43 @@ def synthesize_all(report: ResearchReport, verbose: bool = False) -> CustomerDat
 
     # Step 6: Scorers
     print("  [6/10] Generating scorers...")
-    sc = generate_scorers(report)
+    sc = _checkpointed(cache_dir, "06_scorers", lambda: generate_scorers(report))
     data.scorers = sc["scorers"]
 
     # Step 7: Facets
     print("  [7/10] Generating facets...")
-    fc = generate_facets(report, data.ai_feature_modes)
+    fc = _checkpointed(cache_dir, "07_facets", lambda: generate_facets(report, data.ai_feature_modes))
     data.facets = fc["facets"]
 
     # Step 8: Schema contexts
     print("  [8/10] Generating schema contexts...")
-    ctx = generate_schema_contexts(report, verticals, data.domain_entities, data.entity_properties)
+    ctx = _checkpointed(
+        cache_dir,
+        "08_schema_contexts",
+        lambda: generate_schema_contexts(report, verticals, data.domain_entities, data.entity_properties),
+    )
     data.schema_contexts = ctx["schema_contexts"]
 
     # Step 9: Golden dataset
     print("  [9/10] Generating golden dataset...")
-    gd = generate_golden_dataset(report, data.ai_feature_modes, data.domain_entities, data.entity_properties, data.schema_contexts)
+    gd = _checkpointed(
+        cache_dir,
+        "09_golden_dataset",
+        lambda: generate_golden_dataset(
+            report, data.ai_feature_modes, data.domain_entities, data.entity_properties, data.schema_contexts
+        ),
+    )
     data.golden_dataset_rows = gd["golden_dataset_rows"]
     if verbose:
         print(f"    {len(data.golden_dataset_rows)} test cases")
 
     # Step 10: Multi-turn conversations
     print("  [10/10] Generating multi-turn conversations...")
-    mt = generate_multi_turn(report, data.ai_feature_modes)
+    mt = _checkpointed(
+        cache_dir,
+        "10_multi_turn",
+        lambda: generate_multi_turn(report, data.ai_feature_modes),
+    )
     data.multi_turn_conversations = mt["multi_turn_conversations"]
     data.prior_conversation_snippets = mt["prior_conversation_snippets"]
 
